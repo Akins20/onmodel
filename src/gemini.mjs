@@ -140,12 +140,14 @@ export class ImageClient {
     }
   }
 
-  async generate({ prompt, references = [], labels = [], history = [], aspectRatio = "1:1", size = "1K", op = "generate" }) {
+  async generate({ prompt, parts: preamble = [], references = [], labels = [], history = [], aspectRatio = "1:1", size = "1K", op = "generate" }) {
     if (!ASPECT_RATIOS.includes(aspectRatio)) throw new Error(`aspectRatio must be one of ${ASPECT_RATIOS.join(", ")}`);
     const sizes = this.price?.sizes ?? IMAGE_SIZES;
     if (!sizes.includes(size)) throw new Error(`${this.model} makes images at ${sizes.join(", ")}, not ${size}`);
     this.assertBudget(1, size);
-    const parts = [];
+    // The rules and the brief first, then the references, then the subject: the
+    // stable part leads, and the thing to paint is the last thing read.
+    const parts = [...preamble];
     for (const [i, ref] of references.entries()) {
       if (labels[i]) parts.push(text(labels[i]));
       parts.push(await imagePart(ref));

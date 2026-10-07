@@ -41,6 +41,13 @@ export const DEFAULTS = {
   // Keying: how far from the key colour (CIEDE2000) still counts as background,
   // and whether the key's tint is removed from the edge pixels it bled into.
   key: { tolerance: 30, despill: true },
+  // Exact output sizes to write beside the full-size result, as "64x64" or "64".
+  sizes: [],
+  // Pixel-art mode: the grid the art lives on and how many colours it may use.
+  // null means ordinary art. { "grid": 32, "colors": 16 } is a 32 by 32 sprite.
+  pixel: null,
+  // Snap every output's colours to the palette (always on in pixel mode).
+  quantize: false,
   // Refuse to start a call that would carry a run past this many dollars.
   budgetUSD: 2,
   out: "onmodel-out",
@@ -87,6 +94,13 @@ export function flagOverrides(flags = {}) {
   if (flags.size) o.size = flags.size;
   if (flags.aspect) o.aspectRatio = flags.aspect;
   if (flags.candidates !== undefined) o.candidates = Number(flags.candidates);
+  if (flags.count !== undefined) o.candidates = Number(flags.count);
+  if (flags.sizes) o.sizes = list(flags.sizes);
+  if (flags.pixel !== undefined) {
+    const m = String(flags.pixel).match(/^(\d+)(?:[:,/](\d+))?$/);
+    o.pixel = m ? { grid: Number(m[1]), ...(m[2] ? { colors: Number(m[2]) } : {}) } : { grid: NaN };
+  }
+  if (flags.quantize) o.quantize = true;
   if (flags.out) o.out = flags.out;
   if (flags.brief) o.brief = flags.brief;
   if (flags.budget !== undefined) o.budgetUSD = Number(flags.budget);
@@ -128,6 +142,21 @@ export function validate(cfg) {
   if (!isObject(cfg.key)) throw new Error("key must be an object");
   if (!(typeof cfg.key.tolerance === "number" && cfg.key.tolerance >= 1 && cfg.key.tolerance <= 80)) throw new Error("key.tolerance must be a colour distance from 1 to 80");
   if (typeof cfg.key.despill !== "boolean") throw new Error("key.despill must be true or false");
+  if (!Array.isArray(cfg.sizes)) throw new Error('sizes must be a list such as ["64x64", "128"]');
+  cfg.sizes = cfg.sizes.map((s) => {
+    const m = String(s).trim().match(/^(\d+)(?:\s*[x×]\s*(\d+))?$/i);
+    if (!m) throw new Error(`size ${JSON.stringify(s)} is not a size such as "64x64" or "64"`);
+    const width = Number(m[1]);
+    const height = Number(m[2] ?? m[1]);
+    if (!(width >= 1 && height >= 1 && width <= 8192 && height <= 8192)) throw new Error(`size ${s} is out of range`);
+    return { width, height };
+  });
+  if (cfg.pixel !== null) {
+    if (!isObject(cfg.pixel)) throw new Error('pixel must be null or { "grid": 32, "colors": 16 }');
+    if (!(Number.isInteger(cfg.pixel.grid) && cfg.pixel.grid >= 4 && cfg.pixel.grid <= 512)) throw new Error("pixel.grid must be a whole number of pixels from 4 to 512");
+    if (cfg.pixel.colors !== undefined && !(Number.isInteger(cfg.pixel.colors) && cfg.pixel.colors >= 2 && cfg.pixel.colors <= 256)) throw new Error("pixel.colors must be from 2 to 256");
+  }
+  if (typeof cfg.quantize !== "boolean") throw new Error("quantize must be true or false");
   if (cfg.budgetUSD !== null && !(typeof cfg.budgetUSD === "number" && cfg.budgetUSD >= 0 && Number.isFinite(cfg.budgetUSD))) throw new Error("budgetUSD must be a number of dollars, or null for no cap");
   for (const key of ["out", "ledger"]) if (typeof cfg[key] !== "string" || !cfg[key].trim()) throw new Error(`${key} must be a path`);
   if (!isObject(cfg.pricing)) throw new Error("pricing must be an object of model prices");
