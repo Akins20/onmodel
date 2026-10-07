@@ -1,0 +1,61 @@
+{
+  "name": "@akins20/onmodel",
+  "version": "0.1.0",
+  "description": "Images, sprites and sets kept on model: a consistency engine over Gemini's image models that generates from your product's real brief and references, measures every candidate, packs sprite sheets, and derives the assets apps, games and pages need.",
+  "type": "module",
+  "bin": {
+    "onmodel": "bin/onmodel.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "templates",
+    "skill",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test",
+    "prepublishOnly": "npm test"
+  },
+  "peerDependencies": {
+    "playwright": ">=1.40"
+  },
+  "peerDependenciesMeta": {
+    "playwright": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "gemini",
+    "nano-banana",
+    "image-generation",
+    "sprites",
+    "sprite-sheet",
+    "game-assets",
+    "icons",
+    "app-icons",
+    "claude-code",
+    "agent",
+    "pixel-art",
+    "animation",
+    "atlas"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Akins20/onmodel.git"
+  },
+  "homepage": "https://github.com/Akins20/onmodel#readme",
+  "bugs": {
+    "url": "https://github.com/Akins20/onmodel/issues"
+  },
+  "author": "Otesc <otesc.co@gmail.com>",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
+}
