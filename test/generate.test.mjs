@@ -198,11 +198,21 @@ test("pixel mode shrinks to the grid with hard pixels, snaps to the palette, and
   assert.equal(processed.outputs[0].width, 16);
   assert.ok(colorCount(processed.outputs[0].image) <= config.palette.length, "snapped to the brief's palette");
   assert.ok(processed.facts.grid && processed.facts.grid.cell >= 2);
-  const { fetchImpl } = fakeApi(jpeg.toString("base64"), { blockThird: false });
-  const result = await withKey(() => generate({ config: { ...config, candidates: 1 }, subject: "the cat", judge: false, fetch: fetchImpl, log: () => {} }));
+  for (let i = 3; i < processed.outputs[0].image.data.length; i += 4) {
+    const a = processed.outputs[0].image.data[i];
+    assert.ok(a === 0 || a === 255, `pixel art has no soft edge, found alpha ${a}`);
+  }
+  const { calls, fetchImpl } = fakeApi(jpeg.toString("base64"), { blockThird: false, judgement: { candidates: [{ index: 1, on_brief: 80, on_model: 100, craft: 70, problems: [], strengths: [] }], pick: 1, reason: "Only one.", edit: "" } });
+  const result = await withKey(() => generate({ config: { ...config, candidates: 1 }, subject: "the cat", fetch: fetchImpl, log: () => {} }));
   const out = result.candidates[0].files.outputs[0];
   assert.equal(out.width, 16);
   assert.ok(out.preview, "a hard-pixel preview is written for people");
   const preview = decodePNG(await readFile(out.preview));
   assert.equal(preview.width, 256);
+  const judgeCall = calls.find((c) => c.url.includes("gemini-3.8-flash"));
+  const shown = judgeCall.body.contents[0].parts.find((p) => p.inlineData);
+  assert.equal(decodePNG(Buffer.from(shown.inlineData.data, "base64")).width, 256, "the judge sees the sprite that ships, not the painting");
+  const written = JSON.parse(await readFile(path.join(result.dir, "generate.json"), "utf8"));
+  assert.ok(!("judgeImage" in written.candidates[0]) && !("image" in written.candidates[0]), "pixel buffers never land in the JSON");
+  assert.ok(!("judgeImage" in JSON.parse(await readFile(path.join(result.dir, "01.json"), "utf8"))));
 });

@@ -127,8 +127,36 @@ export function keyOut(image, keyHex, { tolerance = 30, despill = true } = {}) {
     }
     d[p + 3] = alpha;
   }
-  // The rim: opaque pixels beside a transparent one. A rim much closer to the key
-  // than the interior is a tint the keying left behind.
+  // The rim. A JPEG's anti-aliased edge leaves a one-pixel ring that is a blend of
+  // subject and key but already past the soft band, so it stayed opaque with the
+  // key's tint. For a pixel that touches transparency, and only such a pixel, the
+  // ramp is widened to three times the tolerance and the colour un-mixed; an
+  // interior pixel of the same colour is left alone, so a subject genuinely near
+  // the key's hue never goes translucent inside.
+  const beside = (i, x, y, below) => (x > 0 && d[(i - 1) * 4 + 3] < below) || (x < width - 1 && d[(i + 1) * 4 + 3] < below) || (y > 0 && d[(i - width) * 4 + 3] < below) || (y < height - 1 && d[(i + width) * 4 + 3] < below);
+  const wide = tolerance * 3;
+  const softened = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = y * width + x;
+      if (d[i * 4 + 3] !== 255 || dist[i] >= wide || !beside(i, x, y, 1)) continue;
+      softened.push(i);
+    }
+  }
+  for (const i of softened) {
+    const p = i * 4;
+    const alpha = Math.max(1, Math.round((255 * (dist[i] - tolerance)) / (wide - tolerance)));
+    d[p + 3] = alpha;
+    semi++;
+    if (despill) {
+      const a = alpha / 255;
+      d[p] = clamp((data[p] - key[0] * (1 - a)) / a);
+      d[p + 1] = clamp((data[p + 1] - key[1] * (1 - a)) / a);
+      d[p + 2] = clamp((data[p + 2] - key[2] * (1 - a)) / a);
+    }
+  }
+  // What is left of the rim after that, against the interior: a rim still much
+  // closer to the key than the inside would mean a tint the pass did not reach.
   let rimSum = 0;
   let rimN = 0;
   let inSum = 0;
@@ -137,8 +165,7 @@ export function keyOut(image, keyHex, { tolerance = 30, despill = true } = {}) {
     for (let x = 0; x < width; x++) {
       const i = y * width + x;
       if (d[i * 4 + 3] !== 255) continue;
-      const edge = (x > 0 && d[(i - 1) * 4 + 3] === 0) || (x < width - 1 && d[(i + 1) * 4 + 3] === 0) || (y > 0 && d[(i - width) * 4 + 3] === 0) || (y < height - 1 && d[(i + width) * 4 + 3] === 0);
-      if (edge) {
+      if (beside(i, x, y, 255)) {
         rimSum += dist[i];
         rimN++;
       } else if (i % 7 === 0) {
@@ -158,6 +185,7 @@ export function keyOut(image, keyHex, { tolerance = 30, despill = true } = {}) {
       background: round(transparent / total),
       fringe: round(semi / total),
       residue: opaque ? round(residue / opaque) : 0,
+      rimSoftened: softened.length,
       rimDelta: rimN ? round(rimSum / rimN, 1) : null,
       interiorDelta: inN ? round(inSum / inN, 1) : null,
       bounds,
@@ -359,6 +387,26 @@ export function blit(dst, src, x, y) {
     }
   }
   return dst;
+}
+
+/**
+ * Makes every pixel fully opaque or fully transparent. Pixel art has no soft
+ * edges: a shrink leaves fractional alpha along the outline, and drawn at scale
+ * that reads as a grey halo around the sprite.
+ */
+export function hardenAlpha(image, threshold = 128) {
+  const out = { width: image.width, height: image.height, data: new Uint8Array(image.data) };
+  for (let i = 0; i < image.width * image.height; i++) {
+    const p = i * 4;
+    if (out.data[p + 3] >= threshold) out.data[p + 3] = 255;
+    else {
+      out.data[p] = 0;
+      out.data[p + 1] = 0;
+      out.data[p + 2] = 0;
+      out.data[p + 3] = 0;
+    }
+  }
+  return out;
 }
 
 /** Flattens the image onto a solid colour (an App Store icon may not have alpha). */

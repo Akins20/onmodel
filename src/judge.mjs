@@ -87,7 +87,7 @@ export async function judgeCandidates({ config, subject, candidates, decisions =
     parts.push(text(`## Subject\n${subject}`));
     for (const c of usable) {
       parts.push(text(`### Candidate ${c.index}\nMeasured: ${factLine(c.facts)}`));
-      parts.push(await imagePart(await judgeView(c.image)));
+      parts.push(await imagePart(await judgeView(c.judgeImage ?? c.image)));
     }
     parts.push(text(`## Task\nJudge candidates ${usable.map((c) => c.index).join(", ")}. The grey behind each one is not part of the art; it stands for transparency.`));
     const { data, usage } = await client.generateJSON({ parts, schema: JUDGEMENT, op: `judge:${runLabel}` });

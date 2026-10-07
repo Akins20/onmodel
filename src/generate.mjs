@@ -3,7 +3,7 @@ import path from "node:path";
 import { ImageClient, text } from "./gemini.mjs";
 import { requireBrief, briefSection, contextSections, loadDecisions, decisionsSection, sectionOf } from "./brief.mjs";
 import { decodeImage, encodePNG } from "./image.mjs";
-import { chooseKey, keyOut, trim, fitInto, quantize, colorCount, alphaBounds, gridAdherence, resize } from "./key.mjs";
+import { chooseKey, keyOut, trim, fitInto, quantize, colorCount, alphaBounds, gridAdherence, resize, hardenAlpha } from "./key.mjs";
 import { judgeCandidates } from "./judge.mjs";
 import { renderContactHTML } from "./html.mjs";
 
@@ -83,6 +83,9 @@ export function processCandidate(raw, { config, key }) {
     if (config.quantize || config.pixel) {
       out = quantize(out, { palette: config.palette.length ? config.palette : null, count: config.pixel?.colors ?? 16 }).image;
     }
+    // Pixel art has no soft edge: the shrink's fractional alpha becomes a grey halo
+    // when the sprite is drawn at scale, so every pixel is made opaque or clear.
+    if (config.pixel) out = hardenAlpha(out);
     outputs.push({ width, height, image: out });
   }
   if (config.pixel) {
@@ -167,11 +170,14 @@ export async function generate({ config, subject, name, count, judge = true, fet
       await writeFile(file, encodePNG(out.image));
       candidate.files.outputs.push({ width: out.width, height: out.height, file });
       if (config.pixel) {
-        // A preview a person can see: the sprite enlarged with hard pixels.
+        // A preview a person can see: the sprite enlarged with hard pixels. It is
+        // also what the judge sees, since the sprite, not the painting, is what ships.
         const scale = Math.max(1, Math.floor(256 / Math.max(out.width, out.height)));
+        const preview = resize(out.image, out.width * scale, out.height * scale, { filter: "nearest" });
         const previewFile = `${base}.${out.width}x${out.height}.preview.png`;
-        await writeFile(previewFile, encodePNG(resize(out.image, out.width * scale, out.height * scale, { filter: "nearest" })));
+        await writeFile(previewFile, encodePNG(preview));
         candidate.files.outputs[candidate.files.outputs.length - 1].preview = previewFile;
+        if (!candidate.judgeImage) candidate.judgeImage = preview;
       }
     }
     candidate.turns = result.turns;
@@ -215,7 +221,7 @@ export async function generate({ config, subject, name, count, judge = true, fet
     pixel: config.pixel,
     sizes: config.sizes,
     generatedAt: new Date().toISOString(),
-    candidates: candidates.map(({ image, turns, ...rest }) => rest),
+    candidates: candidates.map(({ image, judgeImage, turns, ...rest }) => rest),
     pick: pick ? pick.index : null,
     judgement,
     usage: { images: client.summary(), judge: judgeSummary },
@@ -225,7 +231,7 @@ export async function generate({ config, subject, name, count, judge = true, fet
   // The sidecars: one per candidate with its prompt and turns, so a candidate can
   // be edited later from exactly where it was, and the summary for the folder.
   for (const c of candidates) {
-    await writeFile(path.join(dir, `${String(c.index).padStart(2, "0")}.json`), JSON.stringify({ ...c, image: undefined, prompt, preamble: parts.filter((p) => p.text).map((p) => p.text), turns: c.turns ?? null }, null, 2));
+    await writeFile(path.join(dir, `${String(c.index).padStart(2, "0")}.json`), JSON.stringify({ ...c, image: undefined, judgeImage: undefined, prompt, preamble: parts.filter((p) => p.text).map((p) => p.text), turns: c.turns ?? null }, null, 2));
   }
   await writeFile(path.join(dir, "generate.json"), JSON.stringify(summary, null, 2));
   const htmlPath = path.join(dir, "contact.html");

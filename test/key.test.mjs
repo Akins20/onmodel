@@ -63,6 +63,29 @@ test("a blended edge becomes a soft alpha and its colour is un-mixed from the ke
   assert.deepEqual(px(kept.image, 3, 5).slice(0, 3), mix.slice(0, 3), "without despill the blend is kept as it was");
 });
 
+test("a key-tinted rim beside transparency is softened and un-mixed, while the same colour inside the subject is left alone", () => {
+  // A blend of subject and key that sits past the soft band (opaque) but short of
+  // three times the tolerance, the way a JPEG's anti-aliased edge arrives. Lab is
+  // not linear in RGB, so the blend is found by measuring rather than guessed.
+  const keyLab = labOf(255, 0, 255);
+  let tinted = null;
+  for (let w = 0.1; w <= 0.9 && !tinted; w += 0.02) {
+    const mix = [Math.round(w * 20 + (1 - w) * 255), Math.round(w * 200), Math.round(w * 60 + (1 - w) * 255)];
+    const d = deltaE76(labOf(...mix), keyLab);
+    if (d > 43 && d < 57) tinted = [...mix, 255];
+  }
+  assert.ok(tinted, "a blend inside the rim band exists");
+  const img = paint(14, 14, MAGENTA, [[3, 3, 8, 8, tinted], [4, 4, 6, 6, GREEN], [6, 6, 2, 2, tinted]]);
+  const { image, facts } = keyOut(img, "#ff00ff", { tolerance: 20 });
+  const rim = px(image, 3, 7);
+  const inside = px(image, 6, 7);
+  assert.ok(rim[3] > 0 && rim[3] < 255, `the rim pixel is softened, got alpha ${rim[3]}`);
+  assert.equal(inside[3], 255, "the same colour inside the subject stays opaque");
+  assert.deepEqual(inside.slice(0, 3), tinted.slice(0, 3), "and its colour is not touched");
+  assert.ok(facts.rimSoftened >= 28, `the ring around the subject was softened, got ${facts.rimSoftened}`);
+  assert.ok(facts.rimDelta > facts.interiorDelta * 0.5, `after the pass the rim is no longer far closer to the key than the inside (rim ${facts.rimDelta}, inside ${facts.interiorDelta})`);
+});
+
 test("the real model output keys cleanly: the cat stays, the magenta goes, and nothing touches the edge", async () => {
   const cat = decodeJPEG(await readFile(path.join(fixtures, "cat-256.jpg")));
   const { image, facts } = keyOut(cat, "#ff00ff", { tolerance: 30 });
