@@ -1,0 +1,104 @@
+name: publish
+
+# Publishes the package to npm when a version tag is pushed (v0.1.0, v0.2.0, ...),
+# then the plain-name alias `onmodel` at the same version.
+# Cut a release with: npm version minor && git push origin main --tags
+#
+# Two ways to authorise the publish, checked in this order:
+#
+# 1. Trusted publishing (no token to create, store or rotate): on npmjs.com, open
+#    the package, Settings, "Trusted publisher", choose GitHub Actions and enter the
+#    owner (Akins20), the repository (onmodel) and this workflow's file name
+#    (publish.yml), with direct `npm publish` allowed. npm then accepts a publish
+#    from this workflow on the strength of the OIDC token GitHub issues to it (the
+#    id-token permission below), and attaches provenance on its own. A trusted
+#    publisher can only be added to a package that exists, so the very first
+#    publish of each package is done by hand. This needs npm 11.5 or later.
+#
+# 2. An automation token stored as the NPM_TOKEN repository secret (a granular
+#    access token for these packages with "bypass 2FA" enabled). Used when present.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Unit tests
+        run: npm test
+      - name: The tag must match package.json
+        run: |
+          expected="v$(node -p "require('./package.json').version")"
+          if [ "${GITHUB_REF_NAME}" != "$expected" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match package version ${expected}"
+            exit 1
+          fi
+      - name: Use a current npm (trusted publishing needs 11.5 or later)
+        run: |
+          npm install -g npm@latest
+          npm --version
+      - name: Skip when this version is already on the registry
+        id: registry
+        # A tag that is moved or pushed again re-runs this job; publishing the same
+        # version twice is refused by npm, so end quietly instead.
+        run: |
+          spec="$(node -p "require('./package.json').name + '@' + require('./package.json').version")"
+          if npm view "$spec" version > /dev/null 2>&1; then
+            echo "$spec is already published; nothing to do"
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish with the NPM_TOKEN secret
+        if: env.NPM_TOKEN != '' && steps.registry.outputs.published != 'true'
+        run: |
+          npm config set "//registry.npmjs.org/:_authToken=${NPM_TOKEN}"
+          npm publish --provenance --access public
+      - name: Publish through trusted publishing
+        if: env.NPM_TOKEN == '' && steps.registry.outputs.published != 'true'
+        # Verbose so that a refused OIDC token exchange is visible in the log; at the
+        # default level npm says nothing about it and fails with a bare "need auth".
+        run: npm publish --access public --loglevel verbose
+      # `npx onmodel` runs the tool through the plain-name alias, published after the
+      # main package at the same version. It never blocks a release: until its own
+      # trusted publisher is set up on npmjs.com (after a first publish by hand), this
+      # step reports and moves on.
+      - name: Publish the onmodel alias
+        continue-on-error: true
+        run: |
+          node scripts/stamp-alias.mjs
+          spec="onmodel@$(node -p "require('./package.json').version")"
+          if npm view "$spec" version > /dev/null 2>&1; then
+            echo "$spec is already published"
+          else
+            cd alias/onmodel
+            if [ -n "$NPM_TOKEN" ]; then npm config set "//registry.npmjs.org/:_authToken=${NPM_TOKEN}"; fi
+            npm publish --access public --loglevel verbose || {
+              echo "::warning title=onmodel alias::not published. Publish it once by hand (node scripts/stamp-alias.mjs, then npm publish in alias/onmodel), then add a trusted publisher for onmodel on npmjs.com"
+              exit 1
+            }
+          fi
+      - name: What "need auth" means here
+        if: failure()
+        run: |
+          echo "npm asked for a login, so the trusted-publishing token exchange was refused or never attempted."
+          echo "  'package not found': no trusted-publisher record on npmjs.com matches this workflow's identity."
+          echo "     The fields must read exactly: owner Akins20 (the GitHub login, capital A), repository onmodel,"
+          echo "     workflow filename publish.yml (no path), and no environment name."
+          echo "  '403 Forbidden ... OIDC permission denied' after provenance was signed: the record allows only"
+          echo "     'npm stage publish'. Delete it and create it again with direct 'npm publish' allowed."
+          echo "  A package that has never been published cannot have a trusted publisher: publish it once by hand."
+          echo "After correcting the record, re-run this job; nothing in the repository needs to change."

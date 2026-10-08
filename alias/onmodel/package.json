@@ -1,0 +1,39 @@
+{
+  "name": "onmodel",
+  "version": "0.0.0",
+  "description": "The onmodel command under its plain name: `npx onmodel` runs @akins20/onmodel, images, sprites and sets kept on model with Gemini's image models.",
+  "type": "module",
+  "bin": {
+    "onmodel": "bin.mjs"
+  },
+  "files": [
+    "bin.mjs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@akins20/onmodel": "0.0.0"
+  },
+  "keywords": [
+    "onmodel",
+    "gemini",
+    "image-generation",
+    "sprites",
+    "sprite-sheet",
+    "icons",
+    "claude-code"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Akins20/onmodel.git",
+    "directory": "alias/onmodel"
+  },
+  "homepage": "https://github.com/Akins20/onmodel#readme",
+  "author": "Otesc <otesc.co@gmail.com>",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
+}
