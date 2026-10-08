@@ -178,8 +178,10 @@ which and why; `--background` sets it.
 
 **The rulebook.** Every file is checked against what its platform asks, read from the
 platforms' own pages on 2026-10-08 with the source named in the report: exact sizes, no
-transparency where the App Store forbids it, the Android safe zone (66 dp) and the
-maskable one (a circle of 40% radius) for the mark but not the full-bleed background,
+transparency and no alpha channel where the App Store forbids it (opaque icons are
+written as 24-bit PNG, since App Store Connect rejects the channel itself), the Android
+safe zone (66 dp) and the maskable one (a circle of 40% radius) for the mark but not the
+full-bleed background,
 white-only notification icons, one-colour themed icons, the Play icon under 1024 KB. A
 failure makes the command exit with code 2. Android's guidance conflicts with itself (a
 logo at least 48 dp across, inside a 66 dp circle no mask clips, which a square logo
@@ -201,7 +203,10 @@ A store needs one thing an image model makes and nothing else can: an on-brand h
 `store` paints it (full-bleed, no text, keyed on nothing), judges it against the brief
 like any candidate, then crops that hero to cover each target's exact canvas and writes
 it as a 24-bit PNG with no alpha, because every store that takes a PNG rejects one with
-an alpha channel. The hero is the only cost; the crops are deterministic and free.
+an alpha channel. When a PNG would be over the target's byte cap and the target takes
+JPEG, it is written as the highest-quality JPEG that fits instead. The hero is the only
+cost; the crops are deterministic and free. Everything lands in `<out>/<name>/store/`,
+beside any run of the same name, as `icons/` and `sprites/` do.
 
 - **Google Play feature graphic**, 1024 x 500.
 - **Open Graph link preview**, 1200 x 630, which also serves an X large card.
@@ -334,9 +339,10 @@ onmodel price --store                                # one store run; the crops 
 
 It prices images from the per-image figure plus the thinking allowance, states the
 judge as an allowance rather than a measured cost, gives sprites as a best-to-worst
-range (one strip per action, up to every strip repainted the full retry count), and
-lists icons, the store crops and check as free. An unknown model is reported as having
-no price, never given an invented one.
+range (from one strip per action up to every retry, frame repaint and judged repair
+the config allows), and lists icons, the store crops and check as free. Anything it
+cannot price (an unknown model, a size with no per-image figure) shows as "no price"
+with the reason, never as an invented number, and a plan it cannot read is refused.
 
 ## What you get
 

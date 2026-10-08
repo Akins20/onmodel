@@ -90,7 +90,8 @@ read its facts.
 3. **Read the checks before the pictures.** Each graphic is checked for its exact size,
    no alpha, and the target's byte cap (GitHub's is 1 MB); a failure exits 2. Read the
    palette drift (under 5 is on brand) and the judge's note on whether the composition
-   left room for an overlay. Then open `store.html` and look at every crop.
+   left room for an overlay. Then open `<out>/<name>/store/store.html` and look at
+   every crop. A target whose PNG would bust its cap is written as JPEG; the log says so.
 4. **This is the generative half only.** Framing a real screenshot inside a phone with
    a caption is typesetting, not generation; that is ui-critic's `assets` command, run
    against the app's captures. Do not try to make screenshot sets here.

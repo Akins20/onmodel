@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- Fixes from a review of store, check and price:
+  - Opaque icons (the App Store icon, the touch icon, Expo's icon) are written as
+    24-bit PNG. They were RGBA with every pixel opaque, and App Store Connect rejects
+    an icon that has an alpha channel at all. Opaque rules now also fail a file that
+    has the channel, not only one with see-through pixels.
+  - `check` now finds icons and sprites, whose summaries sit in the run's `icons/`
+    and `sprites/` subfolders; before this it only saw generate and store runs.
+  - `check` finds each file under the run folder rather than at the path saved when
+    it was made, so a run that has been committed, copied or checked on CI still works.
+  - `check` now fails instead of passing when it found nothing, when a summary can't
+    be read, or when an icon has no recorded rule (rerun `icons` to record them).
+  - `store` writes into its own `<out>/<name>/store/` folder beside the run of the
+    same name, as icons and sprites do, so it no longer overwrites a generate run.
+  - `store` fails when no hero was painted, drops pixel mode for the banner and
+    removes duplicate targets.
+  - `store` shows your own subject in the report rather than the banner wrapper.
+  - `store` writes a target as JPEG (baseline, in plain JavaScript, checked in
+    Chromium) when its PNG would be over the target's byte cap and the target takes
+    JPEG.
+  - `price` shows "no price", with the reason, for anything it can't price instead
+    of $0. Its sprite ceiling now counts frame repaints and judged repairs, and it
+    refuses inputs it can't read instead of pricing a different plan.
 - Dry-run batch pricing (`onmodel price`): what a planned workload would cost before
   any of it runs, with no API call. It prices generate runs (`--subjects N` by
   `--count` at `--size`), a store run (`--store`, the crops free), and sprites
@@ -21,9 +43,9 @@
   hard platform rules and are re-checked in full (each icon's rule is now kept in
   `icons.json` for this); generated images and sprite atlases are held to the lighter
   promise that they still decode at their recorded size. `--name` or `--in` checks one
-  run, no target checks every run under `--out`; any failure exits 2. Verified against
-  the live Pay in Style outputs (twelve files, all still passing) and on a size
-  mismatch, a stray alpha channel and a missing file.
+  run, no target checks every run under `--out`; any failure exits 2. Verified on the
+  live outputs (after the fixes above: icons, generate, store and a sprite atlas, 100
+  files, all passing) and on a size mismatch, a stray alpha channel and a missing file.
 - Store graphics (`onmodel store`): one on-brand hero is painted by the model,
   full-bleed and without text, judged against the brief like any candidate, and then
   cropped to cover each target's exact canvas and written as a 24-bit PNG with no
