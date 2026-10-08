@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Edits (`onmodel edit`): a candidate's saved conversation is continued with one
+  change, so the model alters the picture it made instead of painting a new one. The
+  result is keyed, sized and measured, measured against its parent (pixels changed,
+  silhouette kept) and judged on whether the change was made and the rest kept. Edits
+  chain flat per candidate (2e1, 2e2) with each parent recorded; the contact sheet
+  shows them before and after. Live: a recolour moved 1% of the pixels, silhouette
+  0.997, kept.
+- Long actions: an action longer than `sprite.stripFrames` (8) is painted as balanced
+  strips, each after the first shown the frame before it, its join measured and
+  retried like any step, the last strip of a loop shown the first frame, and every
+  strip brought to the first's scale. Actions run to 24 frames. Live: ten frames as
+  two strips, joined at 0.94, heights within 5%.
 - Sprites and sequences (`onmodel sheet`, `onmodel sprites`). A model sheet first:
   the character's front, side and back views in one row, sliced and measured for
   agreement. Then each action painted as one strip with the sheet beside the painter,

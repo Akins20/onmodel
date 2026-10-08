@@ -44,9 +44,12 @@ read its facts.
    not a verdict. Show the user the sheet, say what you would take and why, and record
    a rejected direction in `onmodel/decisions.md` with its reason so the painter and
    the judge stop proposing it.
-6. **Apply the edit, or run again.** When the pick needs the judge's edit, put the
-   edit into the subject (or the brief, if it is a rule) and run again; the sidecars
-   keep each candidate's turns for the edit command that is coming. Keep rounds to
+6. **Apply the edit, or run again.** When the pick is right but one thing is off,
+   `onmodel edit --name <slug> --change "<one change>"` continues that candidate's
+   conversation, so everything else stays as it was; check its facts (a small share of
+   pixels changed and the silhouette near 1 for a recolour) and the judge's two scores.
+   One change per edit; chain edits with `--candidate 2e1`. When the picture is wrong
+   as a whole, change the subject or the brief and run again instead. Keep rounds to
    two; a brief that needs a third round is the problem.
 7. **Put it where it goes.** Copy the sized outputs into the project's asset folders
    in that project's own convention (an Android drawable set, an Expo asset folder,
@@ -61,7 +64,8 @@ read its facts.
    the user the three views; the sheet is what every frame is held to, so it is the
    one place worth a second run before going on. `--pick N` on `sprites` uses another
    candidate.
-2. **Actions in the config.** Name, frames (eight at most), fps, motion in words a
+2. **Actions in the config.** Name, frames (up to 24; more than eight are painted as
+   strips that carry on from each other, so check each join in the report), fps, motion in words a
    painter can follow, facing, `mirror` for the opposite direction, `loop: false` for
    one-shot actions, and looser `thresholds` for an action that changes size or shape
    on purpose (a squash, a die that shrinks away), or the measurements will keep

@@ -15,9 +15,10 @@ a person at a terminal. Zero dependencies beyond Node 20.
 
 It makes single images (icons, illustrations, stickers, empty states) and animated
 sequences: sprite sheets for games and any other run of frames that must stay the same
-thing from frame to frame. The edit command and the deterministic layer that turns one
-mark into every icon and store image a platform wants are still to come; see "What it
-does not do yet" below before you plan around them.
+thing from frame to frame. Any candidate can be edited by continuing its conversation
+with the model. The deterministic layer that turns one mark into every icon and store
+image a platform wants is still to come; see "What it does not do yet" below before
+you plan around it.
 
 ## Quick start
 
@@ -123,6 +124,28 @@ strengths; then a pick and one edit. The facts are given as true, so the judge r
 from them instead of guessing at a colour count or whether the background was removed.
 `--no-judge` skips it and keeps the run cheaper.
 
+## Edits
+
+Every candidate's sidecar keeps its whole conversation with the image model, so an
+edit is the next turn of that conversation rather than a fresh request:
+
+```bash
+onmodel edit --name bag-tag --candidate 1 --change "Recolour the rear handle to the same plum as the bag"
+```
+
+The model changes the picture it already made instead of painting a new one, which
+keeps everything the change did not mention and costs one image (about $0.04, and a
+cent for the judge). The result is keyed, sized and measured like any candidate, then
+measured against its parent (the share of pixels that changed visibly, and how much of
+the silhouette survived) and judged on two questions: was the change made, and was
+everything else kept. On the live run that recolour moved 1% of the pixels with the
+silhouette at 0.997, and the judge kept it.
+
+Without `--candidate` the run's pick is edited. Edits chain flat per candidate: the
+first edit of candidate 1 is `1e1`, and `--candidate 1e1` makes `1e2` with `1e1`
+recorded as its parent, so any step can be returned to. The contact sheet gains an
+Edits section with each before and after.
+
 ## Sprites and sequences
 
 A studio keeps a character on model with a model sheet: the character drawn once from
@@ -143,6 +166,13 @@ frames one style, and it costs one image instead of one per frame. The strip is 
 where the poses actually are, read from the keyed alpha, since a model's spacing is
 only roughly even. Too many pieces are merged at the narrowest gaps; too few means poses
 ran together, so the strip is divided equally and that is reported, never hidden.
+An action longer than `sprite.stripFrames` (eight) is painted as several balanced
+strips (ten frames is five and five): each strip after the first is shown the frame
+just before it and told which frames it is, the join is measured like any other step
+and a strip that does not follow on is painted again, the last strip of a looping
+action is shown the first frame it must lead back into, and every strip is brought to
+the first's scale before the action is measured as one. A live ten-frame run joined
+at 0.94 with its heights within 5%; an action can run to 24 frames.
 
 **Measured against the sheet.** Every frame's silhouette is compared with the sheet's
 matching view (side for facing right, mirrored for left, front, back), both drawn at one
@@ -249,6 +279,7 @@ For a character, in `<out>/<name>/`:
 | `init` | write `onmodel.config.json`, `onmodel/brief.md`, `onmodel/decisions.md` |
 | `models [--filter banana]` | the models the key can use, which make images, and the price of each |
 | `generate --subject "..."` | paint a subject from the brief: candidates, keyed, measured, sized, judged |
+| `edit --name x --change "..."` | continue a candidate's conversation with one change; measured against its parent and judged |
 | `sheet --subject "..." --name x` | the model sheet: front, side and back views, sliced and measured |
 | `sprites --name x` | each action as a strip, measured against the sheet, repaired, packed and exported |
 | `cost [--out dir]` | what every run has cost so far, from the ledger |
@@ -258,7 +289,8 @@ Flags for `generate`: `--name slug`, `--count 3`, `--sizes 64,128`, `--pixel 32[
 auto|#hex|none`, `--size 1K`, `--aspect 1:1`, `--model id`, `--judge id`,
 `--no-judge`, `--budget 2`, `--thinking off|low|medium|high`. For `sprites`:
 `--actions "name:frames[:motion];..."` or a JSON file, `--frame 32`, `--subject "..."`,
-`--pick 2`, `--no-sheet`. For every command:
+`--pick 2`, `--no-sheet`. For `edit`: `--candidate 2` or `2e1` (the pick by default),
+`--change "..."`, `--in dir`, `--no-judge`. For every command:
 `--config`, `--out`, `--brief`, `--json`.
 
 ## Configuration
@@ -285,7 +317,7 @@ Every knob has a default. Resolution order, lowest to highest: built-in defaults
   "sizes": ["128", "512"],
   "pixel": null,
   "quantize": false,
-  "sprite": { "frame": null, "fill": 0.9, "anchor": "bottom", "actions": [], "thresholds": { "shape": 0.5, "size": 0.15, "palette": 15, "jump": 0.45 }, "retries": 2, "frameRetries": 1, "judgeRepairs": 1, "maxFrames": 8 },
+  "sprite": { "frame": null, "fill": 0.9, "anchor": "bottom", "actions": [], "thresholds": { "shape": 0.5, "size": 0.15, "palette": 15, "jump": 0.45 }, "retries": 2, "frameRetries": 1, "judgeRepairs": 1, "stripFrames": 8, "maxFrames": 24 },
   "budgetUSD": 2,
   "out": "onmodel-out",
   "ledger": "usage.jsonl",
@@ -295,15 +327,15 @@ Every knob has a default. Resolution order, lowest to highest: built-in defaults
 
 ## What it does not do yet
 
-- **Long actions.** A strip holds up to eight frames (`sprite.maxFrames`, at most 12);
-  a longer cycle is not yet painted as several strips stitched together.
-- **A judge that always gets to keep.** One judged repair round improves an action
-  but does not guarantee a "keep"; the live hurt action went from 50 to 64 and the
-  judge still named a stray pixel and a quick snap between two frames. Raise
-  `sprite.judgeRepairs` to 2, or repaint by hand from the saved sources.
-- **Edits as a command.** Every candidate's turns are saved so an edit can continue
-  from exactly where it was, and the client supports it; the `edit` command is not
-  written yet.
+- **A judge that always gets to keep.** A judged repair round can improve an action
+  but does not guarantee a "keep": on the live runs the hurt action went from 50 to 64
+  and was kept, while a ten-frame run's repair scored 62.7 to 57.7 and was put back.
+  At 32 pixels most of what the judge names is a stray pixel or two. Raise
+  `sprite.judgeRepairs` to 2, or edit the frame by hand from the saved sources.
+- **Editing sheets and sprite frames by command.** `edit` is for `generate`
+  candidates. An edited sheet candidate is not yet sliced into new views, and a
+  sprite frame is repaired through the measured and judged repaints, not edited
+  directly.
 - **Icon sets, store graphics and link previews from one mark.** Planned as a later
   phase, where ui-critic's small `assets` command moves to.
 - **Video.** Sequences ship as atlases, APNG and GIF; video files and video generation
