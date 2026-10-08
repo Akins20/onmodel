@@ -5,11 +5,12 @@ import { readFile } from "node:fs/promises";
 import { loadConfig, init } from "../src/config.mjs";
 import { listModels } from "../src/gemini.mjs";
 import { resolveImagePrice, resolveTextPrice, PRICING_AS_OF } from "../src/pricing.mjs";
-import { generate } from "../src/generate.mjs";
+import { generate, slug } from "../src/generate.mjs";
 import { makeSheet, makeSprites } from "../src/sprites.mjs";
 import { editCandidate } from "../src/edit.mjs";
 import { makeIcons } from "../src/icons.mjs";
 import { makeStore } from "../src/store.mjs";
+import { checkRun, findRuns, failuresOf } from "../src/check.mjs";
 
 const HELP = `onmodel: images, sprites and sets kept on model
 
@@ -36,6 +37,8 @@ Commands
            [--actions "walk:6:a steady walk;jump:5"] [--frame 32] [--subject "..."]
            [--pick 2] [--no-sheet] [--no-judge] [--budget 2]
                                     then pack the atlas with JSON, CSS and C exports and APNG/GIF previews
+  check [--name x | --in dir]       re-check written outputs against the rulebook, no API (a CI gate);
+                                    no target checks every run under --out. Exits 2 on any failure.
   cost [--out dir]                  what every run has cost so far, from the ledger
 
 Flags for every command
@@ -205,6 +208,25 @@ async function main() {
       if (result.stopped) out.push(`stopped early: ${result.stopped}`);
       out.push(`cost ${money(result.estimatedCostUSD)}; open ${result.htmlPath}`);
       emit(config, out.join("\n"), { command: "sprites", ...result });
+      return;
+    }
+    case "check": {
+      const config = await loadConfig(flags);
+      const dirs = flags.in ? [flags.in] : flags.name ? [path.join(config.out, slug(flags.name))] : await findRuns(config.out);
+      if (!dirs.length) {
+        emit(config, `no runs to check under ${config.out}`, { command: "check", runs: [], failures: [] });
+        return;
+      }
+      const runs = [];
+      for (const dir of dirs) runs.push(...(await checkRun({ dir })));
+      const failures = failuresOf(runs);
+      const lines = runs.map((r) => {
+        const fails = r.files.flatMap((f) => f.checks.filter((c) => !c.ok && !c.warn).map((c) => `${f.rel} (${c.check}: ${c.detail})`));
+        return `  ${r.kind} ${r.name}: ${r.files.length} files${fails.length ? `, ${fails.length} failed:\n    ${fails.join("\n    ")}` : " all pass"}`;
+      });
+      const out = [`checked ${runs.length} output set${runs.length === 1 ? "" : "s"} across ${dirs.length} run${dirs.length === 1 ? "" : "s"}`, ...lines, failures.length ? `${failures.length} checks failed` : "everything on disk still meets its rules"];
+      emit(config, out.join("\n"), { command: "check", runs, failures });
+      if (failures.length) process.exitCode = 2;
       return;
     }
     case "cost": {

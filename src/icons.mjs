@@ -330,7 +330,7 @@ export async function makeIcons({ config, name = null, candidate = null, markPat
     await mkdir(path.dirname(target), { recursive: true });
     const buffer = f.image && !Buffer.isBuffer(f.image) ? encodePNG(f.image) : f.image;
     await writeFile(target, buffer);
-    const entry = { platform: f.platform, path: target, rel: f.rel, bytes: buffer.length, note: f.note ?? null, checks: [] };
+    const entry = { platform: f.platform, path: target, rel: f.rel, bytes: buffer.length, note: f.note ?? null, rule: f.rule ?? null, checks: [] };
     if (/\.(xml|json|html|webmanifest|txt)$/.test(f.rel)) entry.text = buffer.toString("utf8");
     if (f.image && !Buffer.isBuffer(f.image)) {
       entry.width = f.image.width;
