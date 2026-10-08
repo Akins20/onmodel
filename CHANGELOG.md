@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Sprites and sequences (`onmodel sheet`, `onmodel sprites`). A model sheet first:
+  the character's front, side and back views in one row, sliced and measured for
+  agreement. Then each action painted as one strip with the sheet beside the painter,
+  sliced where the poses are, and every frame measured: its silhouette and colours
+  against the sheet's matching view, its height against the action's own median
+  frame, each step against the frame before and the seam when it loops. A strip that
+  drifts is painted again and told what went wrong; a frame still wrong is repainted
+  alone between its neighbours and brought into the strip's scale. The judge looks
+  inside the silhouette (eyes, mouths, markings), and when it says redo its named
+  frames are repainted with its fix, must still pass the measurements, and are kept
+  only if a second judgement scores the action no worse. Frames are placed at one
+  scale per action on one baseline, share one palette in pixel mode, can be mirrored,
+  and are packed one action per row with a TexturePacker JSON hash (Aseprite frame
+  tags and durations), a CSS steps() sheet and a C header for raylib, plus APNG and GIF
+  previews. Without a sheet any sequence works, held to itself. Live-verified on a
+  32px pixel-art character.
+- GIF and APNG writers in plain JavaScript, checked against Chromium's own decoders:
+  exact colours, durations and disposal, and a 200-colour image that drives the LZW
+  code size to 12 bits through repeated table resets, 57,600 pixels with no mismatch.
+- A frame repainted alone was measured at its own scale, about twice a strip frame's,
+  so every repaint failed the size check; it is now scaled into the strip's pixel
+  space first. Found by the live run; the simulated model now paints lone frames at
+  double scale, as the real one does.
 - First working loop, for one subject at a time: the brief, the settled decisions,
   the context files and the reference images go to a Gemini image model ahead of
   the subject; each candidate comes back, is keyed to transparency, trimmed,

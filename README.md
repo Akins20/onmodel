@@ -13,10 +13,11 @@ tool: Claude Code writes the brief from the codebase, runs the loop, triages the
 candidates with you, and wires the result into the project. It works just as well for
 a person at a terminal. Zero dependencies beyond Node 20.
 
-This is the first phase, one subject at a time. Sprite sheets and animation actions,
-edit turns as a command, and the deterministic layer that turns one mark into every
-icon and store image a platform wants are the next phases; see "What it does not do
-yet" below before you plan around them.
+It makes single images (icons, illustrations, stickers, empty states) and animated
+sequences: sprite sheets for games and any other run of frames that must stay the same
+thing from frame to frame. The edit command and the deterministic layer that turns one
+mark into every icon and store image a platform wants are still to come; see "What it
+does not do yet" below before you plan around them.
 
 ## Quick start
 
@@ -31,11 +32,17 @@ onmodel generate --subject "a shopping bag with a round price tag hanging from o
 A run of three candidates plus a judgement costs about $0.15 at today's prices. Open
 `onmodel-out/bag-tag/contact.html` to see them side by side.
 
-For a sprite:
+For an animated character, the model sheet first, then the actions:
 
 ```bash
-onmodel generate --subject "the player creature facing right, mouth wide open, idle" --name player-idle --pixel 32:8
+onmodel sheet --subject "Chomp, a round cream creature with a huge mouth and one big eye" --name chomp --pixel 32:8
+onmodel sprites --name chomp --pixel 32:8 --actions "chomp:4:the mouth opening wide then snapping shut;hurt:4:flinching back, then recovering"
 ```
+
+That writes `onmodel-out/chomp/sprites/chomp.png` (the atlas) with `chomp.json`,
+`chomp.css` and `chomp.h` beside it, an animated preview of every action, and
+`sprites.html` to look at all of it. A sheet and two four-frame actions cost about $0.40
+to $0.70, depending on how many strips need painting again.
 
 ## What a run does
 
@@ -116,6 +123,84 @@ strengths; then a pick and one edit. The facts are given as true, so the judge r
 from them instead of guessing at a colour count or whether the background was removed.
 `--no-judge` skips it and keeps the run cheaper.
 
+## Sprites and sequences
+
+A studio keeps a character on model with a model sheet: the character drawn once from
+the front, the side and the back, approved, and pinned beside every animator's desk.
+This works the same way.
+
+**The sheet.** `onmodel sheet --subject "..." --name chomp` asks for the character three
+times in one row, front, side facing right, and back, on one baseline. It runs through
+the ordinary loop (candidates, keying, the judge) and each candidate is sliced into its
+three views and measured for agreement between them: the spread of their heights and
+how far their colours drift apart. The judge's pick is kept when it sliced into three
+clean views; otherwise the best by measurement. `sheet.json` records the pick, and
+`--pick 2` on `sprites` uses a different candidate.
+
+**Strips.** Each action is painted as one strip: all of its frames in a single row, in
+one generation, with the sheet shown to the painter. One generation is what keeps the
+frames one style, and it costs one image instead of one per frame. The strip is sliced
+where the poses actually are, read from the keyed alpha, since a model's spacing is
+only roughly even. Too many pieces are merged at the narrowest gaps; too few means poses
+ran together, so the strip is divided equally and that is reported, never hidden.
+
+**Measured against the sheet.** Every frame's silhouette is compared with the sheet's
+matching view (side for facing right, mirrored for left, front, back), both drawn at one
+height so the comparison is about shape and not size; its colours are compared with the
+view's; its height is compared with the action's own median frame, because a strip and
+a sheet are painted at different pixel scales; and each frame is compared with the one
+before it, and the first with the last when the action loops, to catch a jump. The
+thresholds are in `sprite.thresholds` and can be loosened per action (a squash, a die
+that shrinks away).
+
+**Repairs, measured and judged.** A strip that drifts is painted again, up to
+`sprite.retries` times, and told exactly what went wrong ("frame 2 changed the
+character's shape; the motion jumps at frames 2 and 3"); the best attempt is kept. A
+frame still wrong is repainted alone, with its neighbours shown, up to
+`sprite.frameRetries` times, brought into the strip's scale (a frame painted alone comes
+back about twice the size), and kept only if it measures better. Then the judge looks
+inside the silhouette, where measurement cannot see: eyes, mouths, markings. When it
+says redo it names each frame and the one change that would put it right; those frames
+are repainted with that change, must still pass every measurement, and a second
+judgement decides whether the repair stays or the action is put back as it was
+(`sprite.judgeRepairs`, one round by default).
+
+**Placed, packed, exported.** Frames are placed in cells of `sprite.frame` (the pixel
+grid in pixel mode, else 128) at one scale per action, anchored on the median frame so
+the character is the same size from action to action, feet on one baseline. In pixel
+mode the whole sprite shares one palette, the brief's or one found across every frame,
+so nothing flickers. An action can be mirrored (`"mirror": "walk_left"`). The atlas
+puts one action per row and comes with:
+
+- `<name>.json`: the TexturePacker hash with Aseprite's frame tags and per-frame
+  durations, which Phaser, PixiJS, Godot importers and most engines read.
+- `<name>.css`: a sprite class and a `steps()` animation per action.
+- `<name>.h`: a C header with the frame and action tables and a frame-at-time helper,
+  for raylib and anything else that speaks C.
+- `preview.png` (APNG) and `preview.gif` per action, enlarged with hard pixels in pixel
+  mode so people can see them.
+
+**Any sequence.** `--no-sheet` (or no sheet on disk) holds the frames to each other
+instead: colours to the first frame, every step to the one before. A plant growing, a
+loading animation, a logo assembling itself: anything that must stay the same thing
+while it changes.
+
+Actions are set in the config or with `--actions "name:frames[:motion];..."`, or a path
+to a JSON file of them:
+
+```json
+"sprite": {
+  "frame": 32,
+  "actions": [
+    { "name": "chomp", "frames": 4, "fps": 10, "motion": "the mouth opening wide then snapping shut", "facing": "right", "mirror": "chomp_left" },
+    { "name": "die", "frames": 6, "motion": "spinning and shrinking away", "loop": false, "thresholds": { "size": 0.9, "shape": 0.3 } }
+  ],
+  "retries": 2,
+  "frameRetries": 1,
+  "judgeRepairs": 1
+}
+```
+
 ## Costs and budgets
 
 Prices are built in as of 2026-10-07. An image call bills three things and the API's
@@ -124,6 +209,12 @@ tokens at the image rate, and the model's thinking at the text rate. A 1K image 
 `gemini-nano-banana-2.1` is 1120 image tokens ($0.0336) plus around 900 tokens of
 thought, about $0.04 all in; three candidates and a judgement come to about $0.15.
 Every call is appended to `<out>/usage.jsonl` and `onmodel cost` totals it per run.
+
+Sprites cost what their strips and repairs cost. The live runs on a 32px pixel-art
+character: a three-candidate sheet $0.17, two four-frame actions $0.29 (two strips each
+needed painting again because poses ran together), and one action with a judged repair
+of three frames $0.24. Before a sprite run starts it states the cost if every strip
+lands first time and the most it could cost with every retry.
 
 `budgetUSD` (2 by default) is a cap per run. A batch whose estimate cannot fit is
 refused before a cent is spent, and a run whose real thinking ran past the estimate
@@ -142,6 +233,15 @@ In `<out>/<name>/`:
 - `contact.html`: as painted, keyed over a checkerboard, the outputs, the facts, the
   judge's scores and notes, the pick. Light first, with a dark toggle.
 
+For a character, in `<out>/<name>/`:
+
+- `sheet.json` and `sheet/`: the sheet candidates, each with its three views as PNGs.
+- `sprites/<name>.png`, `.json`, `.css`, `.h`: the atlas and its exports.
+- `sprites/<action>/`: every strip as painted and keyed, every repaint, the placed
+  frames, and `preview.png` (APNG) and `preview.gif`.
+- `sprites/sprites.json` and `sprites/sprites.html`: every attempt, measurement,
+  repair and judgement, and the actions playing.
+
 ## Commands
 
 | command | does |
@@ -149,12 +249,16 @@ In `<out>/<name>/`:
 | `init` | write `onmodel.config.json`, `onmodel/brief.md`, `onmodel/decisions.md` |
 | `models [--filter banana]` | the models the key can use, which make images, and the price of each |
 | `generate --subject "..."` | paint a subject from the brief: candidates, keyed, measured, sized, judged |
+| `sheet --subject "..." --name x` | the model sheet: front, side and back views, sliced and measured |
+| `sprites --name x` | each action as a strip, measured against the sheet, repaired, packed and exported |
 | `cost [--out dir]` | what every run has cost so far, from the ledger |
 
 Flags for `generate`: `--name slug`, `--count 3`, `--sizes 64,128`, `--pixel 32[:16]`,
 `--quantize`, `--references a.png,b.png`, `--palette #hex,#hex`, `--background
 auto|#hex|none`, `--size 1K`, `--aspect 1:1`, `--model id`, `--judge id`,
-`--no-judge`, `--budget 2`, `--thinking off|low|medium|high`. For every command:
+`--no-judge`, `--budget 2`, `--thinking off|low|medium|high`. For `sprites`:
+`--actions "name:frames[:motion];..."` or a JSON file, `--frame 32`, `--subject "..."`,
+`--pick 2`, `--no-sheet`. For every command:
 `--config`, `--out`, `--brief`, `--json`.
 
 ## Configuration
@@ -181,6 +285,7 @@ Every knob has a default. Resolution order, lowest to highest: built-in defaults
   "sizes": ["128", "512"],
   "pixel": null,
   "quantize": false,
+  "sprite": { "frame": null, "fill": 0.9, "anchor": "bottom", "actions": [], "thresholds": { "shape": 0.5, "size": 0.15, "palette": 15, "jump": 0.45 }, "retries": 2, "frameRetries": 1, "judgeRepairs": 1, "maxFrames": 8 },
   "budgetUSD": 2,
   "out": "onmodel-out",
   "ledger": "usage.jsonl",
@@ -190,17 +295,19 @@ Every knob has a default. Resolution order, lowest to highest: built-in defaults
 
 ## What it does not do yet
 
-- **Sprite sheets and actions.** The sprite you get is one frame. Model sheets, named
-  actions generated as strips and sliced, consistency measured frame to frame, atlas
-  packing and the JSON, CSS and C header exports are the next phase; the keying,
-  measurements and pixel mode here are what they will stand on.
+- **Long actions.** A strip holds up to eight frames (`sprite.maxFrames`, at most 12);
+  a longer cycle is not yet painted as several strips stitched together.
+- **A judge that always gets to keep.** One judged repair round improves an action
+  but does not guarantee a "keep"; the live hurt action went from 50 to 64 and the
+  judge still named a stray pixel and a quick snap between two frames. Raise
+  `sprite.judgeRepairs` to 2, or repaint by hand from the saved sources.
 - **Edits as a command.** Every candidate's turns are saved so an edit can continue
   from exactly where it was, and the client supports it; the `edit` command is not
   written yet.
 - **Icon sets, store graphics and link previews from one mark.** Planned as a later
   phase, where ui-critic's small `assets` command moves to.
-- **Video.** Frame sequences assembled into APNG, GIF or sheets are in scope later;
-  video generation is not.
+- **Video.** Sequences ship as atlases, APNG and GIF; video files and video generation
+  are not in scope.
 
 ## Using it from Claude Code
 
