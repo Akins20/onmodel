@@ -759,6 +759,29 @@ function polysToPath(loops, dx, dy) {
     .join("");
 }
 
+/**
+ * The same path moved into another frame, x' = s x + tx and y' = s y + ty, with the
+ * coordinates written out, so a placed icon carries plain paths a renderer can check
+ * rather than a transform group.
+ */
+export function transformPath(d, s, tx, ty) {
+  const tokens = d.match(/[MLHVCZ]|-?\d*\.?\d+(?:e[-+]?\d+)?/gi) ?? [];
+  let out = "";
+  let i = 0;
+  const X = () => r2(s * Number(tokens[i++]) + tx);
+  const Y = () => r2(s * Number(tokens[i++]) + ty);
+  while (i < tokens.length) {
+    const cmd = tokens[i++];
+    if (cmd === "M" || cmd === "L") out += `${cmd}${X()} ${Y()}`;
+    else if (cmd === "H") out += `H${X()}`;
+    else if (cmd === "V") out += `V${Y()}`;
+    else if (cmd === "C") out += `C${X()} ${Y()} ${X()} ${Y()} ${X()} ${Y()}`;
+    else if (cmd === "Z" || cmd === "z") out += "Z";
+    else throw new Error(`unexpected path command ${cmd}`);
+  }
+  return out;
+}
+
 /** Parses the path text written here (absolute M, L, H, V, C, Z) back into polygons. */
 export function pathToPolygons(d, { step = 1 } = {}) {
   const polys = [];
@@ -1081,6 +1104,17 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
       layers.push({ index: order[li], ...finals[order[li]], d: curvesToPath(fitted, 0, 0), loops: loops.length, curves: fitted.reduce((t, c) => t + c.length, 0) });
     }
   }
+  // The silhouette alone, one path: what a one-colour icon (a themed or notification
+  // icon) needs, far smaller than every colour layer drawn in white.
+  let silhouettePath = null;
+  if (exact) {
+    const mask = Int16Array.from(labels, (l) => (l >= 0 ? 0 : -1));
+    silhouettePath = polysToPath(pixelLoops(mask, w, h, 0), 0, 0);
+  } else {
+    const soft = blur(Float32Array.from({ length: w * h }, (_, i) => src.data[i * 4 + 3] / 255), w, h, 0.6);
+    const minLoop = Math.max(4, found.opaque * 0.00003);
+    silhouettePath = curvesToPath(contours(soft, w, h, 0.5).filter((l) => Math.abs(polygonArea(l)) >= minLoop).map((l) => fitLoop(l, tolerance)), 0, 0);
+  }
   const render = renderLayers(layers, w, h, { crisp: exact });
   const fid = fidelity(src, render);
   const verdict = exact ? (fid.silhouette >= 0.999 && fid.colourKept >= 0.999 ? "exact" : "approximate") : fid.silhouette >= 0.97 && fid.colourKept >= 0.93 ? "good" : fid.silhouette >= 0.93 && fid.colourKept >= 0.85 ? "approximate" : "poor";
@@ -1103,6 +1137,7 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
   };
   return {
     layers: layers.map(({ index, ...l }) => l),
+    silhouette: silhouettePath,
     tokens: finals.filter((f, i) => layers.some((l) => l.index === i)).map((f) => ({ name: token(f.name), hex: f.hex, brand: f.brand })),
     svg,
     android: androidText(layers, w, h, { token }),
@@ -1145,10 +1180,13 @@ export function svgText(layers, w, h, { title = "mark", crisp = false, token = (
 
 const resName = (name) => name.replace(/[^a-z0-9]+/gi, "_").toLowerCase();
 
-/** An Android vector drawable: the same paths, filled from colour resources. */
-export function androidText(layers, w, h, { token = (n) => n, size = 48 } = {}) {
+/**
+ * An Android vector drawable: the same paths, filled from colour resources, or all in
+ * one colour (`fill`, such as "#FFFFFFFF") for a themed or notification icon.
+ */
+export function androidText(layers, w, h, { token = (n) => n, size = 48, fill = null } = {}) {
   const scale = size / Math.max(w, h);
-  const paths = layers.map((l) => `    <path\n        android:fillColor="@color/${resName(token(l.name))}"\n        android:fillType="evenOdd"\n        android:pathData="${l.d}" />`).join("\n");
+  const paths = layers.map((l) => `    <path\n        android:fillColor="${fill ?? `@color/${resName(token(l.name))}`}"\n        android:fillType="evenOdd"\n        android:pathData="${l.d}" />`).join("\n");
   return `<?xml version="1.0" encoding="utf-8"?>\n<vector xmlns:android="http://schemas.android.com/apk/res/android"\n    android:width="${Math.round(w * scale)}dp"\n    android:height="${Math.round(h * scale)}dp"\n    android:viewportWidth="${w}"\n    android:viewportHeight="${h}">\n${paths}\n</vector>\n`;
 }
 

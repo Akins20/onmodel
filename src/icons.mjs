@@ -11,6 +11,8 @@ import { checkIcon, DENSITIES, ADAPTIVE, MASKABLE_SAFE_RADIUS, PLAY_MAX_BYTES, R
 import { slug } from "./generate.mjs";
 import { parseCandidateId, fileBase } from "./edit.mjs";
 import { renderIconsHTML } from "./html.mjs";
+import { vectorize, paletteNames, transformPath, svgText, androidText, androidColoursText, renderLayers } from "./vector.mjs";
+import { silhouette, iou } from "./measure.mjs";
 
 /**
  * One mark, every icon a platform asks for: Android adaptive layers at every
@@ -168,12 +170,43 @@ export function chooseBackground(mark, palette = []) {
 
 const xml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
 
+/**
+ * Where placeMark puts the mark on a size x size canvas: the same scale (from the
+ * mark's reach, or its box) and the same centring, as numbers, so a vector icon lands
+ * exactly where its PNG does.
+ */
+export function placement(mark, size, { radius = null, box = null, pixel = false } = {}) {
+  const reach = markRadius(mark) + (pixel ? 0 : 0.5);
+  let s = radius ? (radius * size - (pixel ? 0 : 1)) / reach : ((box ?? 1) * size) / Math.max(mark.width, mark.height);
+  s = Math.min(s, size / Math.max(mark.width, mark.height));
+  if (pixel && s >= 1) s = Math.floor(s);
+  return { s, ox: (size - mark.width * s) / 2, oy: (size - mark.height * s) / 2 };
+}
+
+/**
+ * A traced mark's layers moved onto an icon canvas, and a check that they draw like
+ * the PNG made for the same place: the silhouettes at the PNG's size overlap closely.
+ */
+function placedVector(mark, vector, size, opts) {
+  const { s, ox, oy } = placement(mark, size, opts);
+  return vector.layers.map((l) => ({ ...l, d: transformPath(l.d, s, ox + s * vector.crop.x, oy + s * vector.crop.y) }));
+}
+
+function drawsLike(layers, png, pixel) {
+  const drawn = renderLayers(layers, png.width, png.height, { crisp: pixel });
+  const overlap = iou(silhouette(drawn), silhouette(png));
+  return [{ check: "draws like the PNG", ok: overlap >= 0.85, detail: `silhouette overlap ${Math.round(overlap * 1000) / 1000} with the ${png.width}x${png.height} PNG` }];
+}
+
 /** Builds every icon in memory: [{ rel, image | buffer, rule, platform, note }]. */
-export function buildIcons(mark, { background, pixel = false, name = "app" }) {
+export function buildIcons(mark, { background, pixel = false, name = "app", vector = null, tokenPrefix = "brand" }) {
   const files = [];
-  const add = (platform, rel, image, rule = null, note = null) => files.push({ platform, rel, image, rule, note });
+  const add = (platform, rel, image, rule = null, note = null, extra = {}) => files.push({ platform, rel, image, rule, note, ...extra });
   const safeR = ADAPTIVE.safe / 2 / ADAPTIVE.layer;
   const onBg = (size, radius) => over(fillBackground(blank(size, size), background), placeMark(mark, size, { radius, pixel }));
+  const token = (n) => `${tokenPrefix}-${n}`;
+  // Android draws vectors without crisp edges, so pixel art keeps its PNGs there.
+  const androidVector = vector && !pixel;
 
   // Android
   for (const [d, k] of Object.entries(DENSITIES)) {
@@ -188,7 +221,22 @@ export function buildIcons(mark, { background, pixel = false, name = "app" }) {
     add("android", `android/res/drawable-${d}/ic_stat_notify.png`, silhouetteOf(placeMark(mark, note, { box: 20 / 24, pixel })), { width: note, height: note, transparent: true, whiteOnly: true });
   }
   add("android", "android/play-store-512.png", onBg(512, 0.36), { width: 512, height: 512, maxBytes: PLAY_MAX_BYTES });
-  const adaptive = `<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n    <background android:drawable="@color/ic_launcher_background" />\n    <foreground android:drawable="@mipmap/ic_launcher_foreground" />\n    <monochrome android:drawable="@mipmap/ic_launcher_monochrome" />\n</adaptive-icon>\n`;
+  if (androidVector) {
+    // Vector layers in -anydpi folders, which Android prefers over the density PNGs on
+    // the versions that read them (even-odd fills need API 24; adaptive icons 26).
+    const fgLayers = placedVector(mark, vector, ADAPTIVE.layer, { radius: safeR });
+    const fgPng = placeMark(mark, ADAPTIVE.layer, { radius: safeR });
+    add("android", "android/res/drawable-anydpi-v26/ic_launcher_foreground.xml", Buffer.from(androidText(fgLayers, ADAPTIVE.layer, ADAPTIVE.layer, { token, size: ADAPTIVE.layer })), null, "the adaptive foreground as a vector, sharp at every density", { vector: true, checks: drawsLike(fgLayers, fgPng, false) });
+    // one-colour icons need only the silhouette, a single path
+    const outline = { layers: [{ name: "silhouette", hex: "#ffffff", rgb: [255, 255, 255], d: vector.silhouette }], crop: vector.crop };
+    const monoLayers = placedVector(mark, outline, ADAPTIVE.layer, { radius: safeR });
+    add("android", "android/res/drawable-anydpi-v26/ic_launcher_monochrome.xml", Buffer.from(androidText(monoLayers, ADAPTIVE.layer, ADAPTIVE.layer, { size: ADAPTIVE.layer, fill: "#FFFFFFFF" })), null, "the themed-icon layer as a vector: the silhouette, one colour", { vector: true, checks: drawsLike(monoLayers, fgPng, false) });
+    const noteLayers = placedVector(mark, outline, 24, { box: 20 / 24 });
+    add("android", "android/res/drawable-anydpi-v24/ic_stat_notify.xml", Buffer.from(androidText(noteLayers, 24, 24, { size: 24, fill: "#FFFFFFFF" })), null, "the notification icon as a vector, white", { vector: true, checks: drawsLike(noteLayers, placeMark(mark, 24, { box: 20 / 24 }), false) });
+    add("android", `android/res/values/${tokenPrefix.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}_colours.xml`, Buffer.from(androidColoursText(vector.tokens.map((t) => ({ name: t.name, hex: t.hex })))), null, "the brand colours the vector layers fill from; a values-night copy gives them a dark theme", { vector: true });
+  }
+  const layerRef = androidVector ? "@drawable" : "@mipmap";
+  const adaptive = `<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n    <background android:drawable="@color/ic_launcher_background" />\n    <foreground android:drawable="${layerRef}/ic_launcher_foreground" />\n    <monochrome android:drawable="${layerRef}/ic_launcher_monochrome" />\n</adaptive-icon>\n`;
   add("android", "android/res/mipmap-anydpi-v26/ic_launcher.xml", Buffer.from(adaptive));
   add("android", "android/res/mipmap-anydpi-v26/ic_launcher_round.xml", Buffer.from(adaptive));
   add("android", "android/res/values/ic_launcher_background.xml", Buffer.from(`<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="ic_launcher_background">${background.toUpperCase()}</color>\n</resources>\n`));
@@ -208,13 +256,21 @@ export function buildIcons(mark, { background, pixel = false, name = "app" }) {
   };
   add("ios", "ios/AppIcon.appiconset/Contents.json", Buffer.from(JSON.stringify(contents, null, 2) + "\n"));
   add("ios", "ios/icon-composer/foreground.png", placeMark(mark, 1024, { radius: iosRadius, pixel }), { width: 1024, height: 1024, transparent: true }, "the foreground layer to import into Icon Composer, with the background colour below");
-  add("ios", "ios/icon-composer/README.txt", Buffer.from(`Icon Composer (Xcode 26 and later) builds layered icons with Liquid Glass.\nImport foreground.png as the foreground layer and set the background to ${background.toUpperCase()}.\nUntil then, AppIcon.appiconset is a flattened icon Xcode accepts as it is.\n`));
+  if (vector) {
+    const composer = placedVector(mark, vector, 1024, { radius: iosRadius, pixel });
+    add("ios", "ios/icon-composer/foreground.svg", Buffer.from(svgText(composer, 1024, 1024, { title: name, crisp: pixel, token })), null, "the foreground layer as a vector: Icon Composer takes SVG layers", { vector: true, checks: drawsLike(composer, placeMark(mark, 1024, { radius: iosRadius, pixel }), pixel) });
+  }
+  add("ios", "ios/icon-composer/README.txt", Buffer.from(`Icon Composer (Xcode 26 and later) builds layered icons with Liquid Glass.\nImport ${vector ? "foreground.svg (or foreground.png)" : "foreground.png"} as the foreground layer and set the background to ${background.toUpperCase()}.\nUntil then, AppIcon.appiconset is a flattened icon Xcode accepts as it is.\n`));
 
   // Web
   const fav = (size) => placeMark(mark, size, { box: 0.94, pixel });
   add("web", "web/favicon.ico", encodeICO([fav(16), fav(32), fav(48)]), { ico: [16, 32, 48] });
   add("web", "web/favicon-16x16.png", fav(16), { width: 16, height: 16 });
   add("web", "web/favicon-32x32.png", fav(32), { width: 32, height: 32 });
+  if (vector) {
+    const favicon = placedVector(mark, vector, 64, { box: 0.94, pixel });
+    add("web", "web/favicon.svg", Buffer.from(svgText(favicon, 64, 64, { title: name, crisp: pixel, token })), null, "the favicon as a vector, sharp at any size", { vector: true, checks: drawsLike(placedVector(mark, vector, 32, { box: 0.94, pixel }), fav(32), pixel) });
+  }
   add("web", "web/apple-touch-icon.png", onBg(180, iosRadius), { width: 180, height: 180, opaque: true });
   add("web", "web/icon-192.png", onBg(192, iosRadius), { width: 192, height: 192 });
   add("web", "web/icon-512.png", onBg(512, iosRadius), { width: 512, height: 512 });
@@ -234,7 +290,7 @@ export function buildIcons(mark, { background, pixel = false, name = "app" }) {
     "web",
     "web/head.html",
     Buffer.from(
-      `<link rel="icon" href="/favicon.ico" sizes="48x48">\n<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">\n<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">\n<link rel="apple-touch-icon" href="/apple-touch-icon.png">\n<link rel="manifest" href="/manifest.webmanifest">\n<meta name="theme-color" content="${xml(background)}">\n`,
+      `${vector ? '<link rel="icon" type="image/svg+xml" href="/favicon.svg">\n' : ""}<link rel="icon" href="/favicon.ico" sizes="48x48">\n<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">\n<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">\n<link rel="apple-touch-icon" href="/apple-touch-icon.png">\n<link rel="manifest" href="/manifest.webmanifest">\n<meta name="theme-color" content="${xml(background)}">\n`,
     ),
   );
 
@@ -324,7 +380,16 @@ export async function makeIcons({ config, name = null, candidate = null, markPat
   if (!transparent) log(`  the mark has no transparency, so it will sit on the background as a square; a keyed mark from generate looks better\n`);
   log(`  ${label}: icons from ${path.basename(file)} (${mark.width}x${mark.height}${pixel ? ", pixel art, hard pixels" : ""}), on ${bg.hex} (contrast ${bg.contrast}, ${bg.reason})\n`);
 
-  const files = buildIcons(mark, { background: bg.hex, pixel, name: label });
+  // Vector icons when the mark traces well; otherwise the PNGs alone, with the reason.
+  const tokenPrefix = config.vector?.tokenPrefix ?? "brand";
+  const traced = vectorize(mark, { palette: config.palette, names: paletteNames(config.briefText), pixel: pixel ? true : null, tokenPrefix, title: label, detail: config.vector?.detail ?? "normal" });
+  const usable = !traced.refused && ["good", "exact"].includes(traced.facts.verdict);
+  const vectorSummary = usable
+    ? { verdict: traced.facts.verdict, mode: traced.facts.mode, tokens: traced.tokens, facts: traced.facts }
+    : { skipped: traced.refused ?? `the trace was ${traced.facts.verdict} (silhouette ${traced.facts.silhouette}, ${Math.round(traced.facts.colourKept * 100)}% of pixels kept their colour), so the icons stay PNG` };
+  log(usable ? `  vector icons too: the mark traced ${traced.facts.verdict} (${traced.facts.mode === "pixel" ? "pixel art, exact" : `${traced.facts.colours} colours`})${pixel ? "; Android keeps PNGs, since it draws vectors without crisp edges" : ""}\n` : `  no vector icons: ${vectorSummary.skipped}\n`);
+
+  const files = buildIcons(mark, { background: bg.hex, pixel, name: label, vector: usable ? traced : null, tokenPrefix });
   const written = [];
   for (const f of files) {
     const target = path.join(dir, f.rel);
@@ -333,8 +398,9 @@ export async function makeIcons({ config, name = null, candidate = null, markPat
     // Connect rejects the channel itself, even when every pixel is opaque.
     const buffer = f.image && !Buffer.isBuffer(f.image) ? (f.rule?.opaque ? encodePNG24(f.image) : encodePNG(f.image)) : f.image;
     await writeFile(target, buffer);
-    const entry = { platform: f.platform, path: target, rel: f.rel, bytes: buffer.length, note: f.note ?? null, rule: f.rule ?? null, checks: [] };
-    if (/\.(xml|json|html|webmanifest|txt)$/.test(f.rel)) entry.text = buffer.toString("utf8");
+    const entry = { platform: f.platform, path: target, rel: f.rel, bytes: buffer.length, note: f.note ?? null, rule: f.rule ?? null, checks: f.checks ?? [], ...(f.vector ? { vector: true } : {}) };
+    // snippets to paste; vector paths are files to copy, not text to read in a report
+    if (/\.(xml|json|html|webmanifest|txt)$/.test(f.rel) && !f.vector) entry.text = buffer.toString("utf8");
     if (f.image && !Buffer.isBuffer(f.image)) {
       entry.width = f.image.width;
       entry.height = f.image.height;
@@ -354,7 +420,7 @@ export async function makeIcons({ config, name = null, candidate = null, markPat
   }
   const failures = written.flatMap((f) => f.checks.filter((c) => !c.ok && !c.warn).map((c) => ({ file: f.rel, ...c })));
   const warnings = written.flatMap((f) => f.checks.filter((c) => !c.ok && c.warn).map((c) => ({ file: f.rel, ...c })));
-  const summary = { tool: "onmodel", kind: "icons", name: label, dir, mark: file, markSize: { width: mark.width, height: mark.height }, pixel, transparent, background: bg, rulesAsOf: RULES_AS_OF, sources: RULE_SOURCES, files: written, previews, failures, warnings, generatedAt: new Date().toISOString() };
+  const summary = { tool: "onmodel", kind: "icons", name: label, dir, mark: file, markSize: { width: mark.width, height: mark.height }, pixel, transparent, background: bg, rulesAsOf: RULES_AS_OF, sources: RULE_SOURCES, files: written, previews, failures, warnings, vector: vectorSummary, generatedAt: new Date().toISOString() };
   await writeFile(path.join(dir, "icons.json"), JSON.stringify(summary, null, 2));
   const htmlPath = path.join(dir, "icons.html");
   await writeFile(htmlPath, renderIconsHTML(summary, dir));

@@ -144,7 +144,19 @@ test("one mark becomes every platform's icons, all passing their rules, with the
   assert.deepEqual(appIcon.rule, { width: 1024, height: 1024, opaque: true }, "the rule is recorded for check to re-apply");
   const contents = JSON.parse(await readFile(file("ios/AppIcon.appiconset/Contents.json"), "utf8"));
   assert.deepEqual(contents.images.map((i) => i.appearances?.[0]?.value ?? "default"), ["default", "dark", "tinted"]);
-  assert.match(await readFile(file("android/res/mipmap-anydpi-v26/ic_launcher.xml"), "utf8"), /<monochrome android:drawable="@mipmap\/ic_launcher_monochrome" \/>/);
+  // the flat mark traces, so vector icons come too, each drawing like its PNG
+  assert.equal(result.vector.verdict, "good");
+  assert.match(await readFile(file("android/res/mipmap-anydpi-v26/ic_launcher.xml"), "utf8"), /<monochrome android:drawable="@drawable\/ic_launcher_monochrome" \/>/);
+  for (const rel of ["web/favicon.svg", "ios/icon-composer/foreground.svg", "android/res/drawable-anydpi-v26/ic_launcher_foreground.xml", "android/res/drawable-anydpi-v26/ic_launcher_monochrome.xml", "android/res/drawable-anydpi-v24/ic_stat_notify.xml"]) {
+    const entry = result.files.find((f) => f.rel === rel);
+    assert.ok(entry?.vector, `${rel} is written`);
+    assert.ok(entry.checks.length && entry.checks.every((c) => c.ok), `${rel} draws like its PNG: ${JSON.stringify(entry.checks)}`);
+  }
+  assert.match(await readFile(file("android/res/drawable-anydpi-v26/ic_launcher_monochrome.xml"), "utf8"), /android:fillColor="#FFFFFFFF"/, "the themed layer is one colour");
+  assert.match(await readFile(file("android/res/drawable-anydpi-v26/ic_launcher_foreground.xml"), "utf8"), /android:viewportWidth="108"/);
+  assert.match(await readFile(file("android/res/values/brand_colours.xml"), "utf8"), /<color name="brand_/);
+  assert.match(await readFile(file("web/head.html"), "utf8"), /^<link rel="icon" type="image\/svg\+xml" href="\/favicon.svg">/, "the SVG favicon is offered first");
+  assert.match(await readFile(file("web/favicon.svg"), "utf8"), /viewBox="0 0 64 64"/);
   assert.match(await readFile(file("android/res/values/ic_launcher_background.xml"), "utf8"), /#F4E9F1/);
   const manifest = JSON.parse(await readFile(file("web/manifest.webmanifest"), "utf8"));
   assert.ok(manifest.icons.some((i) => i.purpose === "maskable"));
@@ -185,4 +197,26 @@ test("the mark is taken from a run's candidate, its grid output in pixel mode, a
   for (let i = 0; i < 100; i++) solid.data.set([200, 200, 200, 255], i * 4);
   await writeFile(opaque, encodePNG(solid));
   assert.equal((await loadMark({ config, markPath: opaque })).transparent, false);
+});
+
+test("pixel art gets exact SVG icons but keeps its PNGs on Android, and painted art gets none", async () => {
+  const { dir, config } = await setup();
+  const pixelFile = path.join(dir, "sprite.png");
+  await writeFile(pixelFile, encodePNG(disc(24, PLUM)));
+  const pix = await makeIcons({ config, markPath: pixelFile, log: () => {} });
+  assert.equal(pix.vector.mode, "pixel");
+  assert.equal(pix.vector.verdict, "exact");
+  assert.ok(pix.files.some((f) => f.rel === "web/favicon.svg"), "an exact SVG favicon");
+  assert.ok(!pix.files.some((f) => f.rel.includes("drawable-anydpi")), "no Android vectors: Android draws them without crisp edges");
+  assert.match(await readFile(path.join(pix.dir, "android/res/mipmap-anydpi-v26/ic_launcher.xml"), "utf8"), /@mipmap\/ic_launcher_foreground/);
+  assert.match(await readFile(path.join(pix.dir, "web/favicon.svg"), "utf8"), /shape-rendering="crispEdges"/);
+
+  const paintedFile = path.join(dir, "painted.png");
+  const painted = blank(200, 200);
+  for (let y = 0; y < 200; y++) for (let x = 0; x < 200; x++) if ((x - 100) ** 2 + (y - 100) ** 2 < 90 * 90) painted.data.set([x, 90, 255 - y, 255], (y * 200 + x) * 4);
+  await writeFile(paintedFile, encodePNG(painted));
+  const out = await makeIcons({ config, markPath: paintedFile, log: () => {} });
+  assert.match(out.vector.skipped, /gradients or shading/);
+  assert.ok(!out.files.some((f) => f.vector), "no vector files");
+  assert.deepEqual(out.failures, [], "and the PNG icons are made as before");
 });

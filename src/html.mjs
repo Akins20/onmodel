@@ -154,6 +154,17 @@ td.f{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}
 pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;margin:6px 0 14px}
 .meta{color:var(--mut);font-size:13px}`;
 
+/** The icons report's vector section: what was traced and where it went, or why not. */
+function vectorBlock(summary, dir) {
+  const v = summary.vector;
+  if (!v) return "";
+  if (v.skipped) return `<section class="block"><h2>Vector icons</h2><p class="meta">None: ${esc(v.skipped)}</p></section>`;
+  const svgs = summary.files.filter((f) => f.vector && f.rel.endsWith(".svg"));
+  const shown = svgs.map((f) => `<figure><img class="checker" src="${esc(relativeSrc(dir, f.path))}" alt=""${summary.pixel ? ' style="image-rendering:pixelated"' : ""}><figcaption>${esc(f.rel)}</figcaption></figure>`).join("");
+  const swatches = (v.tokens ?? []).map((t) => `<span class="swatch" style="background:${esc(t.hex)}"></span><code>--${esc(t.name)}</code>`).join(" &nbsp; ");
+  return `<section class="block"><h2>Vector icons</h2><p class="meta">The mark traced ${esc(v.verdict)} (${v.mode === "pixel" ? "pixel art, exact" : `${v.facts.colours} colours, silhouette ${v.facts.silhouette}`}). ${summary.pixel ? "Android keeps its PNGs, since it draws vectors without crisp edges." : "Android's adaptive icon now points at the vector layers."} Fills: ${swatches}</p><div class="previews">${shown}</div></section>`;
+}
+
 export function renderIconsHTML(summary, dir) {
   const platforms = { android: "Android", ios: "iOS", web: "Web", expo: "Expo" };
   const previews = summary.previews.map((p) => `<figure><img class="checker" src="${esc(relativeSrc(dir, p.path))}" alt="" style="${summary.pixel ? "image-rendering:pixelated" : ""}"><figcaption>${esc(p.caption)}</figcaption></figure>`).join("");
@@ -183,6 +194,7 @@ export function renderIconsHTML(summary, dir) {
   const failures = summary.failures.length ? `<div class="verdict warn">${summary.failures.length} check${summary.failures.length === 1 ? "" : "s"} failed: ${esc(summary.failures.map((f) => `${f.file} (${f.check})`).join(", "))}.${warnLine}</div>` : `<div class="verdict"><b>Every file passes its platform's rules</b> as read on ${esc(summary.rulesAsOf)}.${warnLine}</div>`;
   const body = `<header><h1>${esc(summary.name)} icons</h1><button class="theme" type="button">Dark</button><p class="lead">From ${esc(path.basename(summary.mark))} (${summary.markSize.width}x${summary.markSize.height}${summary.pixel ? ", pixel art kept hard" : ""}) · <span class="swatch" style="background:${esc(summary.background.hex)}"></span>${esc(summary.background.hex)}, contrast ${summary.background.contrast} with the mark, ${esc(summary.background.reason)} · ${esc(summary.generatedAt)}</p></header>
 ${failures}
+${vectorBlock(summary, dir)}
 <section class="block"><h2>How it will look</h2><div class="previews">${previews}</div></section>
 ${blocks}
 <section class="block"><p class="meta">Rules read on ${esc(summary.rulesAsOf)} from ${Object.values(summary.sources).map((u) => `<a href="${esc(u)}">${esc(new URL(u).hostname)}</a>`).join(", ")}.</p></section>`;
