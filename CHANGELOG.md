@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Sheet edits (`onmodel edit --sheet`): a model sheet is edited by continuing its
+  conversation like any candidate, and the edit is cut into its front, side and back
+  views, measured for agreement and added to `sheet.json` beside the originals.
+  `sprites --pick 2e1` holds the frames to it; the sheet's own pick never changes on
+  its own. `--pick` now reads an edit's id as text; before, `1e1` would have been read
+  as the number 10.
+- The sprites run's own pre-run estimate now counts every strip of a long action and
+  the judged repairs, using the same count as `price`, and its budget check covers
+  every strip.
 - Fixes from a review of store, check and price:
   - Opaque icons (the App Store icon, the touch icon, Expo's icon) are written as
     24-bit PNG. They were RGBA with every pixel opaque, and App Store Connect rejects

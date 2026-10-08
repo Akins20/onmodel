@@ -113,7 +113,9 @@ exits 2. It is free; add it to the step that would publish the assets.
    facts: three views found by gaps, a small height spread, a small colour spread. Show
    the user the three views; the sheet is what every frame is held to, so it is the
    one place worth a second run before going on. `--pick N` on `sprites` uses another
-   candidate.
+   candidate. When one detail is off in every view, `onmodel edit --name <slug> --sheet
+   --change "..."` fixes it and cuts the edit into new views; then `sprites --pick 2e1`
+   (the edit's id) holds the frames to it.
 2. **Actions in the config.** Name, frames (up to 24; more than eight are painted as
    strips that carry on from each other, so check each join in the report), fps, motion in words a
    painter can follow, facing, `mirror` for the opposite direction, `loop: false` for

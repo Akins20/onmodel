@@ -146,6 +146,18 @@ first edit of candidate 1 is `1e1`, and `--candidate 1e1` makes `1e2` with `1e1`
 recorded as its parent, so any step can be returned to. The contact sheet gains an
 Edits section with each before and after.
 
+A model sheet is edited the same way with `--sheet`:
+
+```bash
+onmodel edit --name chomp-player --sheet --change "Make the eye a single white dot, the same in all three views"
+onmodel sprites --name chomp-player --pick 2e1
+```
+
+The edited sheet is cut into its front, side and back views and measured for
+agreement like any sheet candidate, and it is added to `sheet.json` beside the
+originals. The sheet's pick does not change on its own; `sprites --pick 2e1` holds the
+frames to the edit.
+
 ## Icons
 
 ```bash
@@ -409,7 +421,7 @@ auto|#hex|none`, `--size 1K`, `--aspect 1:1`, `--model id`, `--judge id`,
 `--pick 2`, `--no-sheet`. For `store`: `--subject "..."`, `--targets
 play-feature,og,github`, `--mark logo.png`, `--count 3`, `--size 2K`, `--budget 2`,
 `--no-judge`. For `edit`: `--candidate 2` or `2e1` (the pick by default),
-`--change "..."`, `--in dir`, `--no-judge`. For `check`: `--name x` or `--in dir`,
+`--change "..."`, `--in dir`, `--sheet`, `--no-judge`. For `check`: `--name x` or `--in dir`,
 else every run under `--out`. For `price`: `--subjects N`, `--sprites "name:frames;..."`,
 `--store`, `--count`, `--size`, `--no-judge`. For every command: `--config`, `--out`,
 `--brief`, `--json`.
@@ -453,10 +465,9 @@ Every knob has a default. Resolution order, lowest to highest: built-in defaults
   and was kept, while a ten-frame run's repair scored 62.7 to 57.7 and was put back.
   At 32 pixels most of what the judge names is a stray pixel or two. Raise
   `sprite.judgeRepairs` to 2, or edit the frame by hand from the saved sources.
-- **Editing sheets and sprite frames by command.** `edit` is for `generate`
-  candidates. An edited sheet candidate is not yet sliced into new views, and a
-  sprite frame is repaired through the measured and judged repaints, not edited
-  directly.
+- **Editing a sprite frame by command.** `edit` works on generate candidates and on
+  model sheets (`--sheet`); a single sprite frame is repaired through the measured and
+  judged repaints, not edited directly.
 - **Store screenshot sets.** `store` makes the generative graphics (the feature graphic,
   the link previews). Framing real screenshots inside a phone with a caption is
   typesetting, not generation, so it stays in [ui-critic](https://github.com/Akins20/ui-critic)'s
