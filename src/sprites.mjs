@@ -348,7 +348,7 @@ async function runAction({ action, character, client, rowParts, singleParts, ref
       }
       fix.source = got.source;
       const trial = frames.slice();
-      trial[i] = got.frame;
+      trial[i] = matchStripScale(got.frame, measured, i);
       const remeasured = measureAction(trial, { reference, thresholds, loop: action.loop });
       fix.after = remeasured.frames[i].flags;
       if (frameBadness(remeasured.frames[i]) < frameBadness(measured.frames[i])) {
@@ -365,6 +365,22 @@ async function runAction({ action, character, client, rowParts, singleParts, ref
 }
 
 const finalFacts = (m) => ({ flagged: m.flagged, jumps: m.jumps, meanIoU: m.meanIoU, minIoU: m.minIoU, frames: m.frames, thresholds: m.thresholds });
+
+/**
+ * A frame repainted alone is drawn at its own scale (a square image, the character
+ * filling most of it), roughly twice the size of a frame cut from a strip, so
+ * before it is measured or used it is brought into the strip's pixel space: as tall
+ * as the frame it replaces, or as the action's median frame when the one it
+ * replaces was itself the wrong size. An intended squash or stretch survives; a
+ * frame that was wrong in size is corrected.
+ */
+export function matchStripScale(frame, measured, index) {
+  const old = measured.frames[index];
+  const target = !old?.height || old.flags.includes("size") ? measured.medianHeight : old.height;
+  if (!target || !frame.height || frame.height === target) return frame;
+  const s = target / frame.height;
+  return resize(frame, Math.max(1, Math.round(frame.width * s)), Math.max(1, Math.round(target)), { filter: "auto" });
+}
 
 /**
  * Repaints one frame alone, with the sheet and its neighbours shown on the key
@@ -489,7 +505,7 @@ export async function makeSprites({ config, name, subject = null, judge = true, 
           }
           entry.source = got.source;
           const trial = frames.slice();
-          trial[i] = got.frame;
+          trial[i] = matchStripScale(got.frame, measured, i);
           const remeasured = measureAction(trial, { reference: r.reference, thresholds: r.thresholds, loop: action.loop });
           entry.flags = remeasured.frames[i].flags;
           if (!entry.flags.some((x) => HARD_FLAGS.includes(x))) {

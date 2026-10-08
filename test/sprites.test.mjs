@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { makeSheet, makeSprites, stripAspect, stripSubject, frameSubject, retryNote, actionScale, onKey, sharedPalette, rowOnGrey } from "../src/sprites.mjs";
+import { makeSheet, makeSprites, stripAspect, stripSubject, frameSubject, retryNote, actionScale, onKey, sharedPalette, rowOnGrey, matchStripScale } from "../src/sprites.mjs";
 import { measureAction } from "../src/measure.mjs";
 import { DEFAULTS, merge, validate, parseActions } from "../src/config.mjs";
 import { encodePNG, decodePNG, isPNG } from "../src/png.mjs";
@@ -77,7 +77,9 @@ function fakeApi(script = {}) {
     else if ((m = prompt.match(/Paint frame (\d+) of (\d+)/))) {
       const frame = Number(m[1]);
       counters[`frame${frame}`] = (counters[`frame${frame}`] ?? 0) + 1;
-      png = paintPoses(script.frame?.(frame, counters[`frame${frame}`]) ?? circles(1), { width: 120 });
+      // A frame painted alone comes back at twice the strip's scale, as it does from
+      // the real model (a square image with the character filling most of it).
+      png = paintPoses(script.frame?.(frame, counters[`frame${frame}`]) ?? circles(1), { width: 240, height: 240, radius: 70 });
     } else if ((m = prompt.match(/Action "([^"]+)"/))) {
       const name = m[1];
       counters[name] = (counters[name] ?? 0) + 1;
@@ -178,6 +180,17 @@ test("an action is measured against the sheet for shape and colour, against itse
   assert.ok(seam.frames[0].flags.includes("seam"), "the first frame is compared with the last when the action loops");
   const noRef = measureAction([frame({}), frame({ colour: GREEN })]);
   assert.ok(noRef.frames[1].flags.includes("colour"), "without a sheet, colours are held to the first frame");
+});
+
+test("a frame repainted alone is brought into the strip's scale before it is measured", () => {
+  const box = (w, h) => ({ width: w, height: h, data: new Uint8Array(w * h * 4).fill(255) });
+  const measured = { medianHeight: 70, frames: [{ height: 70, flags: [] }, { height: 56, flags: [] }, { height: 120, flags: ["size"] }] };
+  const repaint = box(150, 140);
+  const kept = matchStripScale(repaint, measured, 1);
+  assert.deepEqual([kept.width, kept.height], [60, 56], "as tall as the frame it replaces, so an intended squash survives");
+  const corrected = matchStripScale(repaint, measured, 2);
+  assert.deepEqual([corrected.width, corrected.height], [75, 70], "a frame that was the wrong size is brought to the median");
+  assert.equal(matchStripScale(box(10, 56), measured, 1).height, 56);
 });
 
 test("helpers: one scale per action, neighbours shown on the key colour, one palette for the whole sprite", () => {
