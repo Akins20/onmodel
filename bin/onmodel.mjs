@@ -9,6 +9,7 @@ import { generate } from "../src/generate.mjs";
 import { makeSheet, makeSprites } from "../src/sprites.mjs";
 import { editCandidate } from "../src/edit.mjs";
 import { makeIcons } from "../src/icons.mjs";
+import { makeStore } from "../src/store.mjs";
 
 const HELP = `onmodel: images, sprites and sets kept on model
 
@@ -26,6 +27,9 @@ Commands
            [--candidate 2|2e1] [--in dir] [--no-judge]    judge it: was the change made, was the rest kept
   icons --name x [--candidate 2]    every icon Android, iOS, the web and Expo ask for, from one mark, checked
         or --mark logo.png          against a dated rulebook, with mask previews  [--background #hex] (free)
+  store --name x [--subject "..."]  an on-brand hero painted, judged, then cropped to each store's exact
+        [--targets play-feature,og,github] [--mark logo.png]    canvas as a 24-bit PNG (no alpha)
+        [--count 3] [--size 2K] [--budget 2] [--no-judge]
   sheet --subject "..." --name x    the model sheet: front, side and back views every frame is held to
            [--count 3] [--no-judge]
   sprites --name x                  paint each action as a strip, measure it against the sheet, repair
@@ -70,6 +74,7 @@ const OPTIONS = {
   pick: { type: "string" },
   candidate: { type: "string" },
   mark: { type: "string" },
+  targets: { type: "string" },
   change: { type: "string" },
   in: { type: "string" },
   json: { type: "boolean" },
@@ -138,6 +143,26 @@ async function main() {
         `open ${result.htmlPath}`,
       ];
       emit(config, lines.join("\n"), { command: "icons", ...result });
+      if (result.failures.length) process.exitCode = 2;
+      return;
+    }
+    case "store": {
+      const config = await loadConfig(flags);
+      const result = await makeStore({
+        config,
+        subject: flags.subject ?? null,
+        name: flags.name ?? null,
+        targets: flags.targets ? flags.targets.split(",").map((s) => s.trim()).filter(Boolean) : null,
+        markPath: flags.mark ?? null,
+        count: flags.count ? Number(flags.count) : undefined,
+        judge: !flags["no-judge"],
+      });
+      const lines = [
+        `${result.name} store graphics in ${result.dir}: ${result.targets.join(", ")}${result.pick ? `, pick candidate ${result.pick}` : ""}`,
+        result.failures.length ? `${result.failures.length} checks failed:\n${result.failures.map((f) => `  #${f.candidate} ${f.target}: ${f.check}, ${f.detail}`).join("\n")}` : `every graphic meets its target's size and format (as of ${result.rulesAsOf})`,
+        `cost ${money(result.estimatedCostUSD)}; open ${result.htmlPath}`,
+      ];
+      emit(config, lines.join("\n"), { command: "store", ...result });
       if (result.failures.length) process.exitCode = 2;
       return;
     }

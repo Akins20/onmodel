@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { chooseKey, keyOut, alphaBounds, trim, crop, resize, fitInto, fillBackground, colorCount, quantize, medianCut, gridAdherence, labOf, deltaE76 } from "../src/key.mjs";
+import { chooseKey, keyOut, alphaBounds, trim, crop, resize, fitInto, coverInto, fillBackground, colorCount, quantize, medianCut, gridAdherence, labOf, deltaE76 } from "../src/key.mjs";
 import { decodeJPEG } from "../src/jpeg.mjs";
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -179,4 +179,20 @@ test("grid adherence tells real pixel art from art that only looks like it", () 
   const noisy = { ...onGrid, data: new Uint8Array(onGrid.data) };
   for (let i = 0; i < noisy.data.length; i += 4) if (i % 28 === 0) noisy.data[i] = noisy.data[i] > 127 ? noisy.data[i] - 90 : noisy.data[i] + 90;
   assert.ok(gridAdherence(noisy, 8).share < 0.25, `noise within cells breaks the grid, got ${gridAdherence(noisy, 8).share}`);
+});
+
+test("coverInto fills the whole canvas and crops the overflow, where fitInto letterboxes", () => {
+  // a wide opaque source into a tall-ish banner: cover must leave no transparent gap
+  const src = paint(40, 10, [30, 60, 90, 255]);
+  const cov = coverInto(src, 100, 50);
+  assert.equal(cov.width, 100);
+  assert.equal(cov.height, 50);
+  let clear = 0;
+  for (let i = 3; i < cov.data.length; i += 4) if (cov.data[i] < 255) clear += 1;
+  assert.equal(clear, 0, "cover leaves no transparent band");
+  // fitInto, by contrast, letterboxes: a source thinner than the target leaves clear rows
+  const fit = fitInto(src, 100, 50);
+  let fitClear = 0;
+  for (let i = 3; i < fit.data.length; i += 4) if (fit.data[i] < 255) fitClear += 1;
+  assert.ok(fitClear > 0, "fitInto letterboxes with transparent bands");
 });

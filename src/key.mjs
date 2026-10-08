@@ -370,6 +370,23 @@ export function fitInto(image, width, height, { filter = "auto", align = "center
   return out;
 }
 
+/**
+ * Scales the image to COVER width by height: it fills the canvas entirely and the
+ * overflow on the long side is cropped, proportions kept. A store banner or a link
+ * preview bleeds to its edges, where `fitInto` would letterbox it on a flat band.
+ */
+export function coverInto(image, width, height, { filter = "auto", align = "center" } = {}) {
+  const scale = Math.max(width / image.width, height / image.height);
+  const tw = Math.max(1, Math.round(image.width * scale));
+  const th = Math.max(1, Math.round(image.height * scale));
+  const scaled = resize(image, tw, th, { filter });
+  const out = blank(width, height);
+  const ox = Math.floor((width - tw) / 2);
+  const oy = align === "top" ? 0 : align === "bottom" ? height - th : Math.floor((height - th) / 2);
+  blit(out, scaled, ox, oy);
+  return out;
+}
+
 /** Copies `src` onto `dst` at (x, y), replacing what is there (no blending). */
 export function blit(dst, src, x, y) {
   for (let row = 0; row < src.height; row++) {

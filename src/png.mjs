@@ -198,6 +198,40 @@ export function ihdrFor(width, height) {
 
 export { chunk as pngChunk, SIGNATURE as PNG_SIGNATURE };
 
+/** The IHDR payload for an 8-bit RGB image: colour type 2, no alpha channel. */
+export function ihdrFor24(width, height) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return ihdr;
+}
+
+/**
+ * Encodes an image as a 24-bit RGB PNG, dropping the alpha channel. The stores that
+ * take a PNG (Play feature graphic, App Store, Open Graph) forbid an alpha channel,
+ * so a 32-bit PNG is rejected even when every pixel is opaque; the caller flattens
+ * onto a solid colour first, so any transparency is already resolved to a colour.
+ */
+export function encodePNG24({ width, height, data }) {
+  const stride = width * 3;
+  const filtered = Buffer.alloc((stride + 1) * height);
+  for (let y = 0; y < height; y += 1) {
+    const dst = y * (stride + 1);
+    filtered[dst] = y === 0 ? 1 : 2; // Sub on the first row, Up after.
+    for (let x = 0; x < width; x += 1) {
+      const s = (y * width + x) * 4;
+      const d = dst + 1 + x * 3;
+      for (let c = 0; c < 3; c += 1) {
+        const ref = y === 0 ? (x >= 1 ? data[s - 4 + c] : 0) : data[((y - 1) * width + x) * 4 + c];
+        filtered[d + c] = (data[s + c] - ref) & 0xff;
+      }
+    }
+  }
+  return Buffer.concat([SIGNATURE, chunk("IHDR", ihdrFor24(width, height)), chunk("IDAT", deflateSync(filtered, { level: 9 })), chunk("IEND", Buffer.alloc(0))]);
+}
+
 export function encodePNG(image) {
   return Buffer.concat([SIGNATURE, chunk("IHDR", ihdrFor(image.width, image.height)), chunk("IDAT", deflateSync(filterRows(image), { level: 6 })), chunk("IEND", Buffer.alloc(0))]);
 }

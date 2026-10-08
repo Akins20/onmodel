@@ -210,6 +210,47 @@ function frameFacts(f) {
   return bits.join(" · ");
 }
 
+const STORE_CSS = `section.block{max-width:1100px;margin:0 auto 18px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+section.block.pick{border-color:var(--acc);box-shadow:0 0 0 2px var(--acc)}
+.badge{font-size:11px;text-transform:uppercase;letter-spacing:.06em;background:var(--acc);color:#fff;border-radius:999px;padding:2px 8px;margin-left:6px}
+.hero img{width:100%;max-width:1024px;display:block;border:1px solid var(--line);border-radius:10px}
+.targets{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-top:10px}
+.targets figure{margin:0}.targets img{width:100%;display:block;border:1px solid var(--line);border-radius:8px;background:#0b0b0d}
+.targets figcaption{font-size:12px;color:var(--mut);margin-top:4px}
+.swatch{display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid var(--line);vertical-align:-2px;margin-right:6px}
+.meta{color:var(--mut);font-size:13px}`;
+
+export function renderStoreHTML(summary, dir) {
+  const card = (c) => {
+    const picked = summary.pick === c.index;
+    if (!c.files?.hero) return `<section class="block"><h2>Candidate ${c.index}</h2><p class="warn">Not painted: ${esc(c.blocked ?? c.error ?? "unknown")}</p></section>`;
+    const j = c.judgement;
+    const targets = (c.files.targets ?? [])
+      .map((t) => {
+        const failed = t.checks.filter((x) => !x.ok && !x.warn);
+        const status = failed.length ? `<span class="warn">${esc(failed.map((x) => `${x.check}: ${x.detail}`).join("; "))}</span>` : `<span class="okc">passes</span>`;
+        return `<figure><img loading="lazy" src="${esc(relativeSrc(dir, t.file))}" alt=""><figcaption>${esc(t.label)} · ${t.width}x${t.height} · ${Math.max(1, Math.round(t.bytes / 1024))} KB · ${status}</figcaption></figure>`;
+      })
+      .join("");
+    return `<section class="block${picked ? " pick" : ""}" id="c${c.index}"><h2>Candidate ${c.index}${picked ? ' <span class="badge">pick</span>' : ""}</h2>
+<div class="hero"><img loading="lazy" src="${esc(relativeSrc(dir, c.files.hero))}" alt=""></div>
+<div class="targets">${targets}</div>
+${c.facts?.paletteDrift ? `<p class="meta">Palette drift mean ${c.facts.paletteDrift.mean}, max ${c.facts.paletteDrift.max} (CIE76; under 5 is on brand).</p>` : ""}
+${j ? `<div class="judge">${scoreBar("on brief", j.on_brief)}${scoreBar("on model", j.on_model)}${scoreBar("craft", j.craft)}${j.problems?.length ? `<ul>${j.problems.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}</div>` : ""}
+<p class="cost">$${(c.costUSD ?? 0).toFixed(3)}</p></section>`;
+  };
+  const judge = summary.judgement;
+  const failures = summary.failures.length
+    ? `<div class="verdict warn">${summary.failures.length} check${summary.failures.length === 1 ? "" : "s"} failed: ${esc(summary.failures.map((f) => `${f.candidate ? `#${f.candidate} ` : ""}${f.target} (${f.check})`).join(", "))}.</div>`
+    : `<div class="verdict"><b>Every graphic meets its target's size and format</b> as read on ${esc(summary.rulesAsOf)}.</div>`;
+  const body = `<header><h1>${esc(summary.name)} store graphics</h1><button class="theme" type="button">Dark</button><p class="lead">${esc(String(summary.subject).split("\n")[0])} · ${esc(summary.model)} at ${esc(summary.size)} · <span class="swatch" style="background:${esc(summary.background)}"></span>${esc(summary.background)} · ${summary.targets.map(esc).join(", ")}${summary.estimatedCostUSD != null ? ` · $${summary.estimatedCostUSD.toFixed(3)}` : ""} · ${esc(summary.generatedAt)}</p></header>
+${failures}
+${judge && !judge.error ? `<div class="verdict"><b>Pick: ${judge.pick ? `candidate ${judge.pick}` : "none"}.</b> ${esc(judge.reason)}</div>` : judge?.error ? `<div class="verdict warn">The judge failed: ${esc(judge.error)}</div>` : ""}
+${summary.candidates.map(card).join("\n")}
+<section class="block"><p class="meta">Sizes and formats read on ${esc(summary.rulesAsOf)} from ${Object.values(summary.sources).map((u) => `<a href="${esc(u)}">${esc(new URL(u).hostname)}</a>`).join(", ")}.</p></section>`;
+  return page(`${summary.name}: store graphics`, STORE_CSS, body);
+}
+
 export function renderSpritesHTML(summary, dir) {
   const pixel = Boolean(summary.pixel);
   const show = Math.max(1, Math.floor(96 / Math.max(summary.cell.width, summary.cell.height)));

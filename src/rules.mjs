@@ -28,6 +28,8 @@ export const RULE_SOURCES = {
   maskable: "https://www.w3.org/TR/appmanifest/#icon-masks",
   play: "https://support.google.com/googleplay/android-developer/answer/9866151",
   notification: "https://developer.android.com/develop/ui/views/notifications/build-notification",
+  opengraph: "https://developers.facebook.com/docs/sharing/webmasters/images/",
+  github: "https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview",
 };
 
 /** Android densities: the scale of each against mdpi, where 1 dp is 1 px. */
@@ -40,6 +42,22 @@ export const ADAPTIVE = { layer: 108, viewport: 72, safe: 66, logoMin: 48, logoM
 export const MASKABLE_SAFE_RADIUS = 0.4;
 
 export const PLAY_MAX_BYTES = 1024 * 1024;
+
+/**
+ * Generative store and link-preview graphics, read on the date above. Each is an
+ * opaque, full-bleed banner, so the checks are size, no alpha, and the byte cap:
+ *   Google Play feature graphic: 1024 x 500, JPEG or 24-bit PNG, no alpha. The
+ *     Play Console upload accepts up to about 15 MB.
+ *   Open Graph (Facebook, LinkedIn, Slack, iMessage): 1200 x 630, close to 1.91:1,
+ *     a solid background recommended, the file under 8 MB. The same file serves an
+ *     X summary_large_image card, which takes up to 2:1 and under 5 MB.
+ *   GitHub repository social preview: 1280 x 640 recommended, PNG or JPG, under 1 MB.
+ */
+export const STORE_TARGETS = {
+  "play-feature": { width: 1024, height: 500, opaque: true, maxBytes: 15 * 1024 * 1024, label: "Google Play feature graphic", channel: "play", source: "play" },
+  og: { width: 1200, height: 630, opaque: true, maxBytes: 8 * 1024 * 1024, label: "Open Graph link preview (also serves X)", channel: "web", source: "opengraph" },
+  github: { width: 1280, height: 640, opaque: true, maxBytes: 1024 * 1024, label: "GitHub social preview", channel: "web", source: "github" },
+};
 
 /**
  * Checks one written icon against what its platform asks. `image` is the decoded
