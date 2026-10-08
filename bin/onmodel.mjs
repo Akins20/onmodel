@@ -6,6 +6,7 @@ import { loadConfig, init } from "../src/config.mjs";
 import { listModels } from "../src/gemini.mjs";
 import { resolveImagePrice, resolveTextPrice, PRICING_AS_OF } from "../src/pricing.mjs";
 import { generate } from "../src/generate.mjs";
+import { makeSheet, makeSprites } from "../src/sprites.mjs";
 
 const HELP = `onmodel: images, sprites and sets kept on model
 
@@ -19,6 +20,12 @@ Commands
            [--name slug] [--count 3] [--sizes 64,128] [--pixel 32[:16]] [--quantize]
            [--references a.png,b.png] [--palette #hex,#hex] [--background auto|#hex|none]
            [--size 1K] [--aspect 1:1] [--model id] [--judge id] [--no-judge] [--budget 2]
+  sheet --subject "..." --name x    the model sheet: front, side and back views every frame is held to
+           [--count 3] [--no-judge]
+  sprites --name x                  paint each action as a strip, measure it against the sheet, repair
+           [--actions "walk:6:a steady walk;jump:5"] [--frame 32] [--subject "..."]
+           [--pick 2] [--no-sheet] [--no-judge] [--budget 2]
+                                    then pack the atlas with JSON, CSS and C exports and APNG/GIF previews
   cost [--out dir]                  what every run has cost so far, from the ledger
 
 Flags for every command
@@ -51,6 +58,10 @@ const OPTIONS = {
   subject: { type: "string" },
   name: { type: "string" },
   "no-judge": { type: "boolean" },
+  frame: { type: "string" },
+  actions: { type: "string" },
+  "no-sheet": { type: "boolean" },
+  pick: { type: "string" },
   json: { type: "boolean" },
   filter: { type: "string" },
   help: { type: "boolean", short: "h" },
@@ -104,6 +115,34 @@ async function main() {
         `cost ${money(result.estimatedCostUSD)}; open ${result.htmlPath}`,
       ].filter(Boolean);
       emit(config, lines.join("\n"), { command: "generate", ...result });
+      return;
+    }
+    case "sheet": {
+      const config = await loadConfig(flags);
+      const result = await makeSheet({ config, subject: flags.subject, name: flags.name, count: flags.count ? Number(flags.count) : undefined, judge: !flags["no-judge"] });
+      const picked = result.sheet.pick;
+      const lines = [
+        `${result.name} model sheet: ${result.sheet.candidates.length} of ${result.candidates.length} candidates sliced into views in ${result.dir}`,
+        picked ? `using candidate ${picked} (picked by the ${result.sheet.pickedBy}); views ${Object.values(result.sheet.views).join(", ")}` : "no candidate could be sliced into three views; run again",
+        `cost ${money(result.estimatedCostUSD)}; open ${result.htmlPath}`,
+        picked ? `next: onmodel sprites --name ${result.name} --actions "..."` : null,
+      ].filter(Boolean);
+      emit(config, lines.join("\n"), { command: "sheet", ...result });
+      return;
+    }
+    case "sprites": {
+      const config = await loadConfig(flags);
+      const result = await makeSprites({ config, name: flags.name, subject: flags.subject ?? null, judge: !flags["no-judge"], useSheet: !flags["no-sheet"], sheetPick: flags.pick ? Number(flags.pick) : null });
+      const lines = result.actions.map((a) =>
+        a.error
+          ? `  ${a.name}: ${a.error}`
+          : `  ${a.name}: ${a.frames} frames from strip ${a.best} of ${a.attempts.length}${a.fixes.length ? `, ${a.fixes.filter((x) => x.accepted).length}/${a.fixes.length} repaints kept` : ""}, still flagged ${JSON.stringify((a.final?.flagged ?? []).map((i) => i + 1))}${a.judgement?.verdict ? `, judge says ${a.judgement.verdict}` : ""}`,
+      );
+      const out = [`${result.name} sprites in ${result.dir}`, ...lines];
+      if (result.atlas) out.push(`atlas ${result.atlas.width}x${result.atlas.height}: ${[result.atlas.image, result.atlas.json, result.atlas.css, result.atlas.header].map((f) => path.basename(f)).join(", ")}`);
+      if (result.stopped) out.push(`stopped early: ${result.stopped}`);
+      out.push(`cost ${money(result.estimatedCostUSD)}; open ${result.htmlPath}`);
+      emit(config, out.join("\n"), { command: "sprites", ...result });
       return;
     }
     case "cost": {
