@@ -16,9 +16,11 @@ a person at a terminal. Zero dependencies beyond Node 20.
 It makes single images (icons, illustrations, stickers, empty states) and animated
 sequences: sprite sheets for games and any other run of frames that must stay the same
 thing from frame to frame. Any candidate can be edited by continuing its conversation
-with the model. One mark becomes every icon Android, iOS, the web and Expo ask for,
-checked against a dated rulebook. And an on-brand hero becomes the store graphics and
-link previews a listing and a repository need, each at its exact size with no alpha.
+with the model. A flat or pixel-art mark becomes an SVG whose fills are named after
+your brand colours, measured against the original. One mark becomes every icon
+Android, iOS, the web and Expo ask for, checked against a dated rulebook. And an
+on-brand hero becomes the store graphics and link previews a listing and a repository
+need, each at its exact size with no alpha.
 
 <p align="center"><img src="https://raw.githubusercontent.com/Akins20/onmodel/main/docs/chomp.gif" width="256" height="256" alt="Chomp, a round cream creature, opening its mouth wide, snapping it shut with its eye squeezed, and opening again, in pixel art"></p>
 
@@ -209,6 +211,43 @@ cannot do), so a logo under 48 dp is a warning that says why, never a failure.
 (circle, squircle, rounded square, teardrop), the iOS mask, a maskable circle, as a
 themed icon, as a notification on a dark bar and as a 16 px favicon, then every file
 with its checks and the snippets to paste.
+
+**Vector icons.** When the mark traces well (see below), `icons` also writes an SVG
+favicon, an SVG layer for Icon Composer, and Android vector drawables for the adaptive
+foreground, the themed layer and the notification icon. The Android vectors sit in
+`-anydpi` folders, so they take over on the versions that read them while the PNGs
+serve older ones. Each vector icon is checked to draw like its PNG. Pixel art keeps
+PNGs on Android, which draws vectors without crisp edges.
+
+## Vector output
+
+```bash
+onmodel vector --name bag-tag                 # the run's pick, or --candidate 1e1
+onmodel vector --mark logo.png --detail high  # any PNG with transparency
+```
+
+The image models only paint pixels, so a vector comes from tracing after the painting,
+and the tool is honest about what traces:
+
+- **Flat-colour art** becomes smooth curves. The art's flat colours are found, snapped
+  to the brief's palette and named after it, so each fill is a CSS variable such as
+  `--brand-plum` with the real colour as fallback: the SVG renders anywhere, and follows
+  a theme when it is inlined in a page that sets the variables.
+- **Pixel art** converts exactly, every pixel, drawn with crisp edges.
+- **Painted, shaded or textured art** is refused with the measurement that says why,
+  because tracing it would give thousands of shapes and a worse file than the PNG.
+
+You get `<name>.svg`, an Android vector drawable with the colour resources it fills
+from (a `values-night` copy of those colours gives it a dark theme), and a CSS file of
+the variables. The SVG text is then parsed back, drawn and compared with the source:
+how much of the silhouette matches, the share of pixels that kept their colour, the
+colour drift, and the size, for a verdict of exact, good, approximate or poor.
+`vector.html` shows the source, the SVG as the browser draws it, onmodel's own drawing
+and a map of where they differ. A refusal or a poor match exits with code 2.
+
+On the live runs the Pay in Style bag tag traced into 5 brand colours in 15.5 KB, the
+2K store hero into 6 colours in 42 KB, and the Chomp sprite exactly in 2.4 KB. It calls
+no model and costs nothing.
 
 ## Store graphics and link previews
 
@@ -410,7 +449,8 @@ their recorded size. Any failure exits with code 2, naming the file and the rule
 | `init` | write `onmodel.config.json`, `onmodel/brief.md`, `onmodel/decisions.md` |
 | `models [--filter banana]` | the models the key can use, which make images, and the price of each |
 | `generate --subject "..."` | paint a subject from the brief: candidates, keyed, measured, sized, judged |
-| `icons --name x` or `--mark file.png` | every icon Android, iOS, the web and Expo ask for, checked against the rulebook, with mask previews (free) |
+| `icons --name x` or `--mark file.png` | every icon Android, iOS, the web and Expo ask for, checked against the rulebook, with mask previews and vector icons when the mark traces (free) |
+| `vector --name x` or `--mark file.png` | trace a flat or pixel-art mark into an SVG with brand-named fills and an Android vector drawable, drawn back and measured (free) |
 | `store --name x [--subject "..."]` | an on-brand hero painted and judged, then cropped to the Play feature graphic, the Open Graph and the GitHub previews, no alpha |
 | `edit --name x --change "..."` | continue a candidate's conversation with one change; measured against its parent and judged |
 | `sheet --subject "..." --name x` | the model sheet: front, side and back views, sliced and measured |
@@ -426,7 +466,8 @@ auto|#hex|none`, `--size 1K`, `--aspect 1:1`, `--model id`, `--judge id`,
 `--actions "name:frames[:motion];..."` or a JSON file, `--frame 32`, `--subject "..."`,
 `--pick 2`, `--no-sheet`. For `store`: `--subject "..."`, `--targets
 play-feature,og,github`, `--mark logo.png`, `--count 3`, `--size 2K`, `--budget 2`,
-`--no-judge`. For `edit`: `--candidate 2` or `2e1` (the pick by default),
+`--no-judge`. For `vector`: `--candidate 2` or `2e1`, or `--mark file.png`, and
+`--detail low|normal|high`. For `edit`: `--candidate 2` or `2e1` (the pick by default),
 `--change "..."`, `--in dir`, `--sheet`, `--no-judge`. For `check`: `--name x` or `--in dir`,
 else every run under `--out`. For `price`: `--subjects N`, `--sprites "name:frames;..."`,
 `--store`, `--count`, `--size`, `--no-judge`. For every command: `--config`, `--out`,
@@ -479,8 +520,10 @@ Every knob has a default. Resolution order, lowest to highest: built-in defaults
   typesetting, not generation, so it stays in [ui-critic](https://github.com/Akins20/ui-critic)'s
   `assets` command where the captures already are, rather than being rebuilt here.
 - **Icon Composer files.** Apple's layered `.icon` format is not documented, so the
-  tool writes a flattened asset catalog Xcode accepts and the foreground layer and
-  background colour to import into Icon Composer by hand.
+  tool writes a flattened asset catalog Xcode accepts and the foreground layer (an SVG
+  when the mark traces) and background colour to import into Icon Composer by hand.
+- **Vectors from painted art.** Shaded, textured or painterly art stays a PNG on
+  purpose; a trace of it would be thousands of shapes and a worse file.
 - **Video.** Sequences ship as atlases, APNG and GIF; video files and video generation
   are not in scope.
 

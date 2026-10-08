@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+- Vector output (`onmodel vector`): the image models only paint pixels, so a mark is
+  traced after painting. Flat-colour art becomes an SVG and an Android vector
+  drawable; pixel art converts exactly, every pixel; painted, shaded or textured art
+  is refused with the measurement that says why. The art's flat colours are found from
+  its interior pixels (a small accent or a thin outline seeds its own colour rather
+  than being outvoted by a large background), snapped to the brief's palette and
+  named after it, so every fill is a CSS variable such as `--brand-plum` with the real
+  colour as fallback, and the Android drawable fills from colour resources. Colours
+  stack bottom to top but overlap only in the interior, so no gap opens between two
+  colours and no colour bleeds at the silhouette; pixels on the rim take their colour
+  from inside, so key residue never turns into an outline. Contours are found at
+  sub-pixel precision and fitted with curves between corners. The written SVG is
+  parsed back, drawn and compared with the source (silhouette, pixels that kept their
+  colour, drift, size) for a verdict, and Chromium draws the same files the same way
+  (99.8 to 100 percent of pixels). Free, deterministic, exits 2 for a refusal or a poor
+  match. Live: the Pay in Style bag tag traced into 5 brand colours in 15.5 KB, the
+  2K store hero into 6 colours in 42 KB, the Chomp sprite exactly in 2.4 KB.
+- Vector icons: when the mark traces well, `icons` also writes an SVG favicon (offered
+  first in the head tags), an SVG foreground layer for Icon Composer, and Android
+  vector drawables for the adaptive foreground, the themed monochrome layer and the
+  notification icon, in `-anydpi` folders so they take over on the Android versions
+  that read them while the PNGs serve older ones; the adaptive icon points at them.
+  One-colour icons use the traced silhouette alone (about 2.5 KB). Each vector icon is
+  checked to draw like its PNG. Pixel art keeps PNGs on Android, which draws vectors
+  without crisp edges; a mark that does not trace keeps its PNGs, and the report says
+  why.
+
 ## 0.1.0 (2026-10-08)
 
 The first release.

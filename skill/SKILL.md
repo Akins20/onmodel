@@ -1,6 +1,6 @@
 ---
 name: onmodel
-description: Produce production art (icons, illustrations, stickers, pixel sprites, store graphics) that stays on brand and on model, from a Gemini image model grounded in the product's real brief, palette and references, with every candidate keyed to transparency, measured, sized and judged. Use when a project needs an app icon, empty-state or onboarding art, a sticker, a game sprite or an animated sprite sheet (a character's actions, packed and exported for an engine), a Play feature graphic or an Open Graph or GitHub link preview, any animated sequence that must stay the same thing from frame to frame, or any image that must match an existing style, and when asked to generate, draw, animate or illustrate something for a product.
+description: Produce production art (icons, illustrations, stickers, pixel sprites, store graphics, SVG vectors of flat marks) that stays on brand and on model, from a Gemini image model grounded in the product's real brief, palette and references, with every candidate keyed to transparency, measured, sized and judged. Use when a project needs an app icon, empty-state or onboarding art, a sticker, a game sprite or an animated sprite sheet (a character's actions, packed and exported for an engine), a Play feature graphic or an Open Graph or GitHub link preview, any animated sequence that must stay the same thing from frame to frame, or any image that must match an existing style, and when asked to generate, draw, animate or illustrate something for a product.
 ---
 
 # onmodel: art that stays on model
@@ -75,6 +75,20 @@ read its facts.
    copy `AppIcon.appiconset` into the asset catalog; put `web/*` in the public folder
    and the `head.html` tags in the page head; for Expo, copy `expo/*.png` to
    `./assets` and merge `expo/app.json`. Commit the icons with the mark that made them.
+
+## Vector output
+1. **When to use it.** A logo or brand mark, a flat illustration that should follow the
+   theme, art for print, or a sprite wanted as SVG. `onmodel vector --name <run>` (the
+   pick, or `--candidate 1e1`) or `--mark <file.png>`. It is free.
+2. **Read the verdict.** Exact (pixel art), good, approximate or poor, from the trace
+   drawn back and compared with the source. A refusal names why (gradients, shading,
+   texture); do not force it: painted art stays a PNG. For approximate, open
+   `vector.html` and look at the red in the difference map before using it.
+3. **Wire it in.** Every fill is `var(--brand-<name>, #hex)`, named from the brief's
+   palette: inline the SVG and set those variables in the page's tokens (or rename
+   them to the project's own tokens) to make it follow light and dark mode. On Android,
+   copy the drawable and its colour resources, and add a `values-night` copy of the
+   colours for a dark theme. `icons` already adds vector icons when the mark traces.
 
 ## Store graphics and link previews
 1. **Get the hero's subject right.** `onmodel store --name <run> --subject "<the one
