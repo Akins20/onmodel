@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { makeSheet, makeSprites, stripAspect, stripSubject, frameSubject, retryNote, actionScale, onKey, sharedPalette, rowOnGrey, matchStripScale, stripParts } from "../src/sprites.mjs";
+import { editCandidate } from "../src/edit.mjs";
+import { makeSheet, makeSprites, loadSheet, stripAspect, stripSubject, frameSubject, retryNote, actionScale, onKey, sharedPalette, rowOnGrey, matchStripScale, stripParts } from "../src/sprites.mjs";
 import { measureAction } from "../src/measure.mjs";
 import { DEFAULTS, merge, validate, parseActions } from "../src/config.mjs";
 import { encodePNG, decodePNG, isPNG } from "../src/png.mjs";
@@ -63,7 +64,8 @@ function fakeApi(script = {}) {
     if (u.includes("gemini-3.8-flash:generateContent")) {
       const props = body.generationConfig.responseSchema.properties;
       let data;
-      if (props.reads_as) {
+      if (props.applied) data = { applied: 90, preserved: 88, problems: [], verdict: "keep" };
+      else if (props.reads_as) {
         const asked = body.contents[0].parts.map((p) => p.text ?? "").join("\n").match(/## Action\n"([^"]+)"/)?.[1];
         counters[`judge:${asked}`] = (counters[`judge:${asked}`] ?? 0) + 1;
         data = script.judge?.(asked, counters[`judge:${asked}`]) ?? { reads_as: 82, on_model: 90, smooth: 86, problems: [], frame_notes: [{ frame: 2, note: "the mouth could open wider" }], fix_frames: [], verdict: "keep" };
@@ -73,7 +75,9 @@ function fakeApi(script = {}) {
     const prompt = body.contents[body.contents.length - 1].parts.at(-1).text;
     let png;
     let m;
-    if (/A model sheet/.test(prompt)) png = paintPoses(circles(3), { width: 330 });
+    // An edit of a sheet comes back as the same three views, recoloured green.
+    if (/^## Edit/.test(prompt)) png = paintPoses(circles(3).map((p) => ({ ...p, colour: GREEN })), { width: 330 });
+    else if (/A model sheet/.test(prompt)) png = paintPoses(circles(3), { width: 330 });
     else if ((m = prompt.match(/Paint frame (\d+) of (\d+)/))) {
       const frame = Number(m[1]);
       counters[`frame${frame}`] = (counters[`frame${frame}`] ?? 0) + 1;
@@ -237,6 +241,40 @@ test("the model sheet is three views, sliced, measured, and the judge's pick is 
   const html = await readFile(result.htmlPath, "utf8");
   assert.match(html, /model sheet/);
   assert.match(html, /figcaption>side</);
+});
+
+test("an edited model sheet is cut into views, added to sheet.json, and can be picked by its id", async () => {
+  const { config } = await setup();
+  const { fetchImpl } = fakeApi();
+  await withKey(() => makeSheet({ config, subject: "a round red creature", name: "player", fetch: fetchImpl, log: quiet }));
+  const sheetDir = path.join(config.out, "player", "sheet");
+  const edited = await withKey(() => editCandidate({ config, name: "player", dir: sheetDir, change: "make the body green", fetch: fetchImpl, log: quiet }));
+  assert.equal(edited.id, "2e1", "the edit is of the sheet's pick");
+  assert.deepEqual(Object.keys(edited.views), ["front", "side", "back"]);
+  assert.equal(edited.sheet.found, 3);
+  assert.equal(edited.sheet.method, "gaps");
+  for (const f of Object.values(edited.views)) await access(f);
+
+  const saved = JSON.parse(await readFile(path.join(config.out, "player", "sheet.json"), "utf8"));
+  const entry = saved.candidates.find((c) => c.index === "2e1");
+  assert.ok(entry, "the edit is recorded beside the candidates");
+  assert.equal(entry.parent, "2");
+  assert.equal(saved.pick, 2, "the pick does not change behind the user's back");
+
+  const sheet = await loadSheet(config, "player", { pick: "2e1" });
+  assert.equal(sheet.pick, "2e1");
+  assert.equal(sheet.source, entry.source, "the sprites are painted from the edit's picture");
+  const front = sheet.viewImages.front;
+  const mid = (Math.floor(front.height / 2) * front.width + Math.floor(front.width / 2)) * 4;
+  assert.ok(front.data[mid + 1] > front.data[mid], "the view is the green edit, not the red original");
+  await assert.rejects(() => loadSheet(config, "player", { pick: "1e1" }), /no candidate 1e1/, "an edit id is never read as the number 10");
+});
+
+test("edit points at the sheet folder when a run's only generate.json is its model sheet", async () => {
+  const { config } = await setup();
+  const { fetchImpl } = fakeApi();
+  await withKey(() => makeSheet({ config, subject: "a round red creature", name: "player", fetch: fetchImpl, log: quiet }));
+  await assert.rejects(() => withKey(() => editCandidate({ config, name: "player", change: "x", fetch: fetchImpl, log: quiet })), /add --sheet/);
 });
 
 test("a clean run paints one strip per action, packs the atlas, exports it, previews it and judges it", async () => {

@@ -149,6 +149,27 @@ const SHEET_VIEWS = ["front", "side", "back"];
 const sheetScore = (c) => (c.sheet.method === "gaps" ? 0 : 10) + c.sheet.heightSpread * 5 + (c.sheet.colourSpread ?? 0) / 10 - (c.judgement?.on_brief ?? 0) / 100;
 
 /**
+ * Cuts a keyed sheet into its three views, writes each as <base>.<view>.png in `dir`,
+ * and measures how well they agree (height spread, colour spread). Used for every
+ * sheet candidate and again for an edited one, so an edit can stand in for its parent.
+ */
+export async function sliceSheetViews(keyed, dir, base) {
+  const slice = sliceStrip(keyed, 3);
+  const views = {};
+  const images = slice.cells.map((cell) => cell.image);
+  for (const [i, image] of images.entries()) {
+    const file = path.join(dir, `${base}.${SHEET_VIEWS[i]}.png`);
+    await writeFile(file, encodePNG(image));
+    views[SHEET_VIEWS[i]] = file;
+  }
+  const heights = images.map((im) => im.height);
+  const sorted = [...heights].sort((a, b) => a - b);
+  let colourSpread = 0;
+  for (let i = 0; i < images.length; i++) for (let j = i + 1; j < images.length; j++) colourSpread = Math.max(colourSpread, paletteDelta(images[i], images[j]) ?? 0);
+  return { views, sheet: { found: slice.found, method: slice.method, heights, heightSpread: round((sorted[sorted.length - 1] - sorted[0]) / (sorted[1] || 1)), colourSpread: round(colourSpread, 2) } };
+}
+
+/**
  * The model sheet: the character three times in one row, front, side and back, the
  * reference every later frame is drawn from and measured against. It runs through
  * the ordinary generation loop (candidates, keying, the judge) at a wide ratio
@@ -163,21 +184,10 @@ export async function makeSheet({ config, subject, name, count, judge = true, fe
   const result = await generate({ config, subject: sheetSubject, name: label, count, judge, fetch: fetchImpl, log, dir, aspectRatio: "16:9", outputs: false, layout: "row", kind: "sheet" });
   for (const c of result.candidates) {
     if (!c.files?.image) continue;
-    const keyed = decodePNG(await readFile(c.files.image));
-    const slice = sliceStrip(keyed, 3);
-    c.views = {};
-    const images = slice.cells.map((cell) => cell.image);
-    for (const [i, image] of images.entries()) {
-      const file = path.join(dir, `${pad2(c.index)}.${SHEET_VIEWS[i]}.png`);
-      await writeFile(file, encodePNG(image));
-      c.views[SHEET_VIEWS[i]] = file;
-    }
-    const heights = images.map((im) => im.height);
-    const sorted = [...heights].sort((a, b) => a - b);
-    let colourSpread = 0;
-    for (let i = 0; i < images.length; i++) for (let j = i + 1; j < images.length; j++) colourSpread = Math.max(colourSpread, paletteDelta(images[i], images[j]) ?? 0);
-    c.sheet = { found: slice.found, method: slice.method, heights, heightSpread: round((sorted[sorted.length - 1] - sorted[0]) / (sorted[1] || 1)), colourSpread: round(colourSpread, 2) };
-    log(`  ${label} sheet ${c.index}: ${slice.found} views found (${slice.method}), heights ${heights.join("/")}, colour spread ${c.sheet.colourSpread}\n`);
+    const cut = await sliceSheetViews(decodePNG(await readFile(c.files.image)), dir, pad2(c.index));
+    c.views = cut.views;
+    c.sheet = cut.sheet;
+    log(`  ${label} sheet ${c.index}: ${c.sheet.found} views found (${c.sheet.method}), heights ${c.sheet.heights.join("/")}, colour spread ${c.sheet.colourSpread}\n`);
   }
   const usable = result.candidates.filter((c) => c.views);
   const judged = result.pick ? usable.find((c) => c.index === result.pick && c.sheet.method === "gaps") : null;
@@ -213,10 +223,13 @@ export async function loadSheet(config, label, { pick = null } = {}) {
     return null;
   }
   let chosen = { source: json.source, keyed: json.keyed, views: json.views, pick: json.pick };
-  if (pick && pick !== json.pick) {
-    const c = json.candidates.find((x) => x.index === pick);
+  // A pick is a candidate (2) or an edit of one (2e1), compared as text: Number("1e1")
+  // is 10, so an edit's id must never pass through a number.
+  const want = pick == null ? null : String(pick).trim().toLowerCase();
+  if (want && want !== String(json.pick)) {
+    const c = json.candidates.find((x) => String(x.index).toLowerCase() === want);
     if (!c) throw new Error(`the sheet has no candidate ${pick}; it has ${json.candidates.map((x) => x.index).join(", ") || "none"}`);
-    chosen = { source: c.source, keyed: c.keyed, views: c.views, pick };
+    chosen = { source: c.source, keyed: c.keyed, views: c.views, pick: c.index };
   }
   if (!chosen.views || !chosen.source) return null;
   const viewImages = {};

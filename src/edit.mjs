@@ -9,6 +9,7 @@ import { normalisePair, iou, silhouette } from "./measure.mjs";
 import { processCandidate, writeOutputs, describeFacts, slug } from "./generate.mjs";
 import { judgeView } from "./judge.mjs";
 import { renderContactHTML } from "./html.mjs";
+import { sliceSheetViews } from "./sprites.mjs";
 
 /**
  * Edits: a candidate's sidecar keeps its whole conversation with the image model,
@@ -99,7 +100,8 @@ export async function editCandidate({ config, name = null, dir: dirOverride = nu
   try {
     summary = JSON.parse(await readFile(path.join(dir, "generate.json"), "utf8"));
   } catch {
-    throw new Error(`no run to edit in ${dir}: it has no generate.json`);
+    const hasSheet = await readFile(path.join(dir, "sheet", "generate.json")).then(() => true, () => false);
+    throw new Error(`no run to edit in ${dir}: it has no generate.json${hasSheet ? "; its model sheet is in sheet/, so add --sheet to edit that" : ""}`);
   }
   if (candidate == null && summary.pick == null) throw new Error("edit needs --candidate: the run has no pick to default to");
   const parentId = parseCandidateId(candidate ?? summary.pick);
@@ -137,6 +139,14 @@ export async function editCandidate({ config, name = null, dir: dirOverride = nu
     const before = decodePNG(await readFile(parent.files.image));
     record.facts = { ...processed.facts, edit: editFacts(before, processed.image) };
     log(`  ${id.id}: ${describeFacts(processed.facts)}, changed ${Math.round(record.facts.edit.changed * 100)}% of the pixels, silhouette ${record.facts.edit.silhouette}, $${(result.costUSD ?? 0).toFixed(3)}\n`);
+    // An edited model sheet is cut into its views like any sheet candidate, so the
+    // sprites can be held to it (sprites --pick <id>).
+    if (summary.kind === "sheet") {
+      const cut = await sliceSheetViews(processed.image, dir, fileBase(id));
+      record.views = cut.views;
+      record.sheet = cut.sheet;
+      log(`  ${id.id}: ${cut.sheet.found} views found (${cut.sheet.method}), heights ${cut.sheet.heights.join("/")}, colour spread ${cut.sheet.colourSpread}\n`);
+    }
     if (judge) {
       try {
         const decisions = await loadDecisions(config);
@@ -158,6 +168,18 @@ export async function editCandidate({ config, name = null, dir: dirOverride = nu
   await writeFile(`${base}.json`, JSON.stringify({ ...record, index: id.id, prompt, turns: result.turns }, null, 2));
   summary.edits = [...(summary.edits ?? []), record];
   await writeFile(path.join(dir, "generate.json"), JSON.stringify(summary, null, 2));
+  if (record.views) {
+    // The sheet's record sits beside its folder (<out>/<name>/sheet.json).
+    const sheetPath = path.join(dir, "..", "sheet.json");
+    try {
+      const sheet = JSON.parse(await readFile(sheetPath, "utf8"));
+      sheet.candidates = [...(sheet.candidates ?? []).filter((c) => String(c.index) !== id.id), { index: id.id, parent: parentId.id, change: record.change, source: record.files.source, keyed: record.files.image, views: record.views, sheet: record.sheet, judgement: record.judgement ?? null }];
+      await writeFile(sheetPath, JSON.stringify(sheet, null, 2));
+      record.sheetPath = sheetPath;
+    } catch (err) {
+      log(`  could not add ${id.id} to ${sheetPath}: ${err.message}\n`);
+    }
+  }
   const htmlPath = path.join(dir, "contact.html");
   await writeFile(htmlPath, renderContactHTML(summary, dir));
   return { ...record, dir, htmlPath };

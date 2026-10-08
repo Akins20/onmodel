@@ -26,7 +26,8 @@ Commands
            [--references a.png,b.png] [--palette #hex,#hex] [--background auto|#hex|none]
            [--size 1K] [--aspect 1:1] [--model id] [--judge id] [--no-judge] [--budget 2]
   edit --name x --change "..."      continue a candidate's conversation with one change, then measure and
-           [--candidate 2|2e1] [--in dir] [--no-judge]    judge it: was the change made, was the rest kept
+           [--candidate 2|2e1] [--in dir] [--sheet] [--no-judge]    judge it: was the change made, was
+                                    the rest kept; --sheet edits the model sheet and cuts the edit into views
   icons --name x [--candidate 2]    every icon Android, iOS, the web and Expo ask for, from one mark, checked
         or --mark logo.png          against a dated rulebook, with mask previews  [--background #hex] (free)
   store --name x [--subject "..."]  an on-brand hero painted, judged, then cropped to each store's exact
@@ -84,6 +85,7 @@ const OPTIONS = {
   subjects: { type: "string" },
   sprites: { type: "string" },
   store: { type: "boolean" },
+  sheet: { type: "boolean" },
   change: { type: "string" },
   in: { type: "string" },
   json: { type: "boolean" },
@@ -177,10 +179,12 @@ async function main() {
     }
     case "edit": {
       const config = await loadConfig(flags);
-      const result = await editCandidate({ config, name: flags.name, dir: flags.in ?? null, candidate: flags.candidate ?? null, change: flags.change, judge: !flags["no-judge"] });
+      const sheetDir = flags.sheet && flags.name ? path.join(config.out, slug(flags.name), "sheet") : null;
+      const result = await editCandidate({ config, name: flags.name, dir: flags.in ?? sheetDir, candidate: flags.candidate ?? null, change: flags.change, judge: !flags["no-judge"] });
       const lines = [
         result.files.image ? `${result.id} from ${result.parent}: ${result.files.image}` : `${result.id} from ${result.parent}: not painted (${result.blocked})`,
         result.facts?.edit ? `changed ${Math.round(result.facts.edit.changed * 100)}% of the pixels, silhouette kept ${result.facts.edit.silhouette}` : null,
+        result.views ? `sheet: ${result.sheet.found} views found (${result.sheet.method}), height spread ${result.sheet.heightSpread}, colour spread ${result.sheet.colourSpread}; hold the sprites to it with: onmodel sprites --name ${flags.name ?? "<name>"} --pick ${result.id}` : null,
         result.judgement && !result.judgement.error ? `judge: ${result.judgement.verdict}, change made ${result.judgement.applied}, rest kept ${result.judgement.preserved}${result.judgement.problems?.length ? `; ${result.judgement.problems.join("; ")}` : ""}` : null,
         `cost ${money(result.estimatedCostUSD)}; open ${result.htmlPath}`,
         result.files.image ? `edit it again with --candidate ${result.id}` : null,
@@ -203,7 +207,7 @@ async function main() {
     }
     case "sprites": {
       const config = await loadConfig(flags);
-      const result = await makeSprites({ config, name: flags.name, subject: flags.subject ?? null, judge: !flags["no-judge"], useSheet: !flags["no-sheet"], sheetPick: flags.pick ? Number(flags.pick) : null });
+      const result = await makeSprites({ config, name: flags.name, subject: flags.subject ?? null, judge: !flags["no-judge"], useSheet: !flags["no-sheet"], sheetPick: flags.pick ?? null });
       const lines = result.actions.map((a) =>
         a.error
           ? `  ${a.name}: ${a.error}`
