@@ -27,11 +27,14 @@ export const slug = (s) =>
 const round = (v, places = 3) => Math.round(v * 10 ** places) / 10 ** places;
 
 /** The rules every painting request carries, shaped by the key, the palette and the mode. */
-export function painterRules({ key, palette = [], pixel = null }) {
+export function painterRules({ key, palette = [], pixel = null, layout = "single" }) {
   const lines = ["You are painting production art for a real product. Follow the brief, the references and the subject exactly, and invent nothing the brief does not ask for."];
+  // A strip of poses is laid out by its subject; only the single subject is told
+  // where to sit, so the two instructions never contradict each other.
+  const placement = layout === "row" ? "Paint only the subject, laid out as the subject describes," : "Paint only the subject, centred, filling about 70% of the frame,";
   lines.push(
     key
-      ? `Paint only the subject, centred, filling about 70% of the frame, on a flat solid background of exactly ${key} that covers every background pixel. No shadow or reflection on the background, no gradient, no vignette, no ground plane, no frame, no border.`
+      ? `${placement} on a flat solid background of exactly ${key} that covers every background pixel. No shadow or reflection on the background, no gradient, no vignette, no ground plane, no frame, no border.`
       : "Compose the image as the brief and the subject ask.",
   );
   lines.push("No text, letters, numbers, logos, signatures or watermarks anywhere in the image.");
@@ -41,8 +44,8 @@ export function painterRules({ key, palette = [], pixel = null }) {
 }
 
 /** The text parts that precede the references and the subject. */
-export async function preambleParts(config, decisions, key) {
-  const parts = [text(painterRules({ key, palette: config.palette, pixel: config.pixel })), text(briefSection(config.briefText))];
+export async function preambleParts(config, decisions, key, { layout = "single" } = {}) {
+  const parts = [text(painterRules({ key, palette: config.palette, pixel: config.pixel, layout })), text(briefSection(config.briefText))];
   if (decisions.length) parts.push(text(decisionsSection(decisions)));
   const extra = await contextSections(config);
   if (extra) parts.push(text(extra));
@@ -58,7 +61,7 @@ export async function preambleParts(config, decisions, key) {
  * keyed to transparency, trimmed, fitted to each size, quantised where the mode
  * asks, with the facts a judge or a later run can hold it to.
  */
-export function processCandidate(raw, { config, key }) {
+export function processCandidate(raw, { config, key, outputs: makeOutputs = true }) {
   let image = raw;
   let keying = null;
   if (key) {
@@ -76,7 +79,7 @@ export function processCandidate(raw, { config, key }) {
     paletteDrift: config.palette.length ? quantize(image, { palette: config.palette }).drift : null,
   };
   const trimmed = trim(image);
-  const sizes = config.sizes.length ? config.sizes : config.pixel ? [{ width: config.pixel.grid, height: config.pixel.grid }] : [];
+  const sizes = !makeOutputs ? [] : config.sizes.length ? config.sizes : config.pixel ? [{ width: config.pixel.grid, height: config.pixel.grid }] : [];
   const outputs = [];
   for (const { width, height } of sizes) {
     let out = fitInto(trimmed, width, height, { filter: config.pixel ? "box" : "auto", align: config.pixel ? "bottom" : "center" });
@@ -108,16 +111,30 @@ export function describeFacts(facts) {
   return bits.join(", ");
 }
 
-export async function generate({ config, subject, name, count, judge = true, fetch: fetchImpl, log = (s) => process.stderr.write(s) }) {
+export async function generate({
+  config,
+  subject,
+  name,
+  count,
+  judge = true,
+  fetch: fetchImpl,
+  log = (s) => process.stderr.write(s),
+  dir: dirOverride = null,
+  aspectRatio = null,
+  outputs = true,
+  layout = "single",
+  kind = "generate",
+}) {
   requireBrief(config);
   if (!subject?.trim()) throw new Error("generate needs --subject: what to paint, in a sentence");
   const label = slug(name ?? subject);
-  const dir = path.join(config.out, label);
+  const dir = dirOverride ?? path.join(config.out, label);
   await mkdir(dir, { recursive: true });
   const n = count ?? config.candidates;
+  const ratio = aspectRatio ?? config.aspectRatio;
   const key = config.background === "auto" ? chooseKey(config.palette) : config.background;
   const decisions = await loadDecisions(config);
-  const { parts, extra } = await preambleParts(config, decisions, key);
+  const { parts, extra } = await preambleParts(config, decisions, key, { layout });
   const ledgerPath = path.join(config.out, config.ledger);
   const client = new ImageClient({ model: config.model, thinking: config.thinking, pricing: config.pricing, ledgerPath, runLabel: label, budgetUSD: config.budgetUSD, fetch: fetchImpl });
   const estimate = client.estimate({ images: n, size: config.size });
@@ -131,7 +148,7 @@ export async function generate({ config, subject, name, count, judge = true, fet
     const op = `${label}#${i}`;
     let result;
     try {
-      result = await client.generate({ prompt, parts, references: config.references, labels, aspectRatio: config.aspectRatio, size: config.size, op });
+      result = await client.generate({ prompt, parts, references: config.references, labels, aspectRatio: ratio, size: config.size, op });
     } catch (err) {
       if (err.code === "BUDGET") {
         log(`  ${i}/${n}: stopped, ${err.message}\n`);
@@ -159,7 +176,7 @@ export async function generate({ config, subject, name, count, judge = true, fet
       candidates.push(candidate);
       continue;
     }
-    const processed = processCandidate(raw, { config, key });
+    const processed = processCandidate(raw, { config, key, outputs });
     candidate.image = processed.image;
     candidate.facts = processed.facts;
     candidate.files.image = `${base}.png`;
@@ -208,13 +225,13 @@ export async function generate({ config, subject, name, count, judge = true, fet
 
   const summary = {
     tool: "onmodel",
-    kind: "generate",
+    kind,
     name: label,
     subject,
     dir,
     model: config.model,
     size: config.size,
-    aspectRatio: config.aspectRatio,
+    aspectRatio: ratio,
     key,
     palette: config.palette,
     references: config.references,

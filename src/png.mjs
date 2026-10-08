@@ -168,7 +168,8 @@ function chunk(type, data) {
  * Encodes an RGBA image as a PNG. Screens are mostly flat colour, so the first row
  * uses the Sub filter and the rest Up, which compresses them well at little cost.
  */
-export function encodePNG({ width, height, data }) {
+/** RGBA rows with PNG filter bytes (Sub on the first row, Up after), ready to deflate. Shared with the APNG writer. */
+export function filterRows({ width, height, data }) {
   const stride = width * 4;
   const filtered = Buffer.alloc((stride + 1) * height);
   for (let y = 0; y < height; y += 1) {
@@ -182,12 +183,23 @@ export function encodePNG({ width, height, data }) {
       for (let x = 0; x < stride; x += 1) filtered[dst + 1 + x] = (data[row + x] - data[row + x - stride]) & 0xff;
     }
   }
+  return filtered;
+}
+
+/** The IHDR payload for an 8-bit RGBA image. */
+export function ihdrFor(width, height) {
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8;
   ihdr[9] = 6;
-  return Buffer.concat([SIGNATURE, chunk("IHDR", ihdr), chunk("IDAT", deflateSync(filtered, { level: 6 })), chunk("IEND", Buffer.alloc(0))]);
+  return ihdr;
+}
+
+export { chunk as pngChunk, SIGNATURE as PNG_SIGNATURE };
+
+export function encodePNG(image) {
+  return Buffer.concat([SIGNATURE, chunk("IHDR", ihdrFor(image.width, image.height)), chunk("IDAT", deflateSync(filterRows(image), { level: 6 })), chunk("IEND", Buffer.alloc(0))]);
 }
 
 /** Reads the width and height of a PNG or JPEG from its header without decoding it. */
