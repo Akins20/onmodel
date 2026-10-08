@@ -57,6 +57,22 @@ read its facts.
 8. **Report** in plain language: what was asked, what was picked and why, what was
    rejected, what the facts said, the cost (`onmodel cost`).
 
+## App icons
+1. **Get the mark right first.** Generate it (or use the user's own PNG with
+   transparency), keep it simple enough to read at 16 px, and edit it until the user is
+   happy; every icon is derived from it, so a flaw in the mark is a flaw everywhere.
+2. **Derive.** `onmodel icons --name <run> [--candidate 1e1]` or `--mark <file.png>`.
+   It is free and takes seconds; rerun it whenever the mark changes.
+3. **Read the checks before the pictures.** A failure means a store or a launcher will
+   reject or cut the file; fix the cause (usually the mark's shape or transparency),
+   never the check. A logo-size warning means the mark's shape or pixel-art scaling
+   kept it under Android's 48 dp; mention it, it is rarely worth changing the mark for.
+   Then open `icons.html` and look at every mask, the themed icon and the 16 px favicon.
+4. **Wire it in the project's own way.** Copy `android/res/*` into `app/src/main/res`;
+   copy `AppIcon.appiconset` into the asset catalog; put `web/*` in the public folder
+   and the `head.html` tags in the page head; for Expo, copy `expo/*.png` to
+   `./assets` and merge `expo/app.json`. Commit the icons with the mark that made them.
+
 ## Sprites and animated sequences
 1. **Sheet first.** `onmodel sheet --subject "<who the character is>" --name <slug>`
    (with `--pixel 32:8` or the config's pixel mode for pixel art). Read the slicing

@@ -16,9 +16,9 @@ a person at a terminal. Zero dependencies beyond Node 20.
 It makes single images (icons, illustrations, stickers, empty states) and animated
 sequences: sprite sheets for games and any other run of frames that must stay the same
 thing from frame to frame. Any candidate can be edited by continuing its conversation
-with the model. The deterministic layer that turns one mark into every icon and store
-image a platform wants is still to come; see "What it does not do yet" below before
-you plan around it.
+with the model. And one mark becomes every icon Android, iOS, the web and Expo ask for,
+checked against a dated rulebook. Store graphics and link previews are still to come;
+see "What it does not do yet" below before you plan around them.
 
 ## Quick start
 
@@ -145,6 +145,50 @@ Without `--candidate` the run's pick is edited. Edits chain flat per candidate: 
 first edit of candidate 1 is `1e1`, and `--candidate 1e1` makes `1e2` with `1e1`
 recorded as its parent, so any step can be returned to. The contact sheet gains an
 Edits section with each before and after.
+
+## Icons
+
+```bash
+onmodel icons --name bag-tag --candidate 1e1          # the mark from a run (the pick by default)
+onmodel icons --mark logo.png --background "#F4E9F1"  # or from any PNG with transparency
+```
+
+One mark becomes every icon a platform asks for. Nothing is generated: it is all
+derived, so it costs nothing and can be rebuilt whenever the mark changes.
+
+- **Android:** adaptive foreground and monochrome layers at every density, the
+  `mipmap-anydpi-v26` XML and the background colour resource, legacy and round
+  launcher icons, notification icons (white on transparent), and the 512 px Play icon.
+- **iOS:** an `AppIcon.appiconset` with the default icon (opaque, as the App Store
+  requires), dark and tinted variants and `Contents.json`, plus the foreground layer
+  and background colour to import into Icon Composer for the layered Liquid Glass icons
+  of the 26 releases.
+- **Web:** `favicon.ico` (16, 32 and 48 px), PNG favicons, the 180 px touch icon, 192
+  and 512 px manifest icons and a maskable one, with the manifest entries and the head
+  tags to paste.
+- **Expo:** `icon.png`, the adaptive foreground and monochrome images, dark and tinted
+  icons, and the `app.json` lines.
+
+The mark is placed by its real reach from its centre, not its bounding box, so a round
+mark fills a circular safe zone instead of being shrunk to fit a square, with room left
+for the antialiased edge. Pixel art is enlarged by whole numbers and stays hard at every
+size. The background is the first colour in the brief's palette the mark stands out on
+(a contrast of 3 or more), else the strongest contrast available, and the report says
+which and why; `--background` sets it.
+
+**The rulebook.** Every file is checked against what its platform asks, read from the
+platforms' own pages on 2026-10-08 with the source named in the report: exact sizes, no
+transparency where the App Store forbids it, the Android safe zone (66 dp) and the
+maskable one (a circle of 40% radius) for the mark but not the full-bleed background,
+white-only notification icons, one-colour themed icons, the Play icon under 1024 KB. A
+failure makes the command exit with code 2. Android's guidance conflicts with itself (a
+logo at least 48 dp across, inside a 66 dp circle no mask clips, which a square logo
+cannot do), so a logo under 48 dp is a warning that says why, never a failure.
+
+**How it will look.** `icons.html` shows the icon through every Android launcher mask
+(circle, squircle, rounded square, teardrop), the iOS mask, a maskable circle, as a
+themed icon, as a notification on a dark bar and as a 16 px favicon, then every file
+with its checks and the snippets to paste.
 
 ## Sprites and sequences
 
@@ -279,6 +323,7 @@ For a character, in `<out>/<name>/`:
 | `init` | write `onmodel.config.json`, `onmodel/brief.md`, `onmodel/decisions.md` |
 | `models [--filter banana]` | the models the key can use, which make images, and the price of each |
 | `generate --subject "..."` | paint a subject from the brief: candidates, keyed, measured, sized, judged |
+| `icons --name x` or `--mark file.png` | every icon Android, iOS, the web and Expo ask for, checked against the rulebook, with mask previews (free) |
 | `edit --name x --change "..."` | continue a candidate's conversation with one change; measured against its parent and judged |
 | `sheet --subject "..." --name x` | the model sheet: front, side and back views, sliced and measured |
 | `sprites --name x` | each action as a strip, measured against the sheet, repaired, packed and exported |
@@ -336,8 +381,12 @@ Every knob has a default. Resolution order, lowest to highest: built-in defaults
   candidates. An edited sheet candidate is not yet sliced into new views, and a
   sprite frame is repaired through the measured and judged repaints, not edited
   directly.
-- **Icon sets, store graphics and link previews from one mark.** Planned as a later
-  phase, where ui-critic's small `assets` command moves to.
+- **Store graphics and link previews.** The Play feature graphic, store screenshot sets
+  and Open Graph images are the next phase, where ui-critic's small `assets` command
+  moves to.
+- **Icon Composer files.** Apple's layered `.icon` format is not documented, so the
+  tool writes a flattened asset catalog Xcode accepts and the foreground layer and
+  background colour to import into Icon Composer by hand.
 - **Video.** Sequences ship as atlases, APNG and GIF; video files and video generation
   are not in scope.
 

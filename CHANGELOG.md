@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Icons (`onmodel icons`): one mark becomes Android adaptive layers at every density
+  with the monochrome layer and XML, legacy, round, notification and Play icons; an iOS
+  asset catalog with dark and tinted variants plus the layer for Icon Composer; the web
+  favicon.ico, touch, manifest and maskable icons with the manifest and head tags; and
+  the Expo files with app.json lines. Every file is checked against a rulebook read from
+  the platforms' pages on 2026-10-08, sources named; a failure exits 2; Android's
+  conflicting 48 dp logo guidance is a warning that explains itself. Previews through
+  every launcher mask, as a themed icon, a notification and a 16 px favicon. The ICO
+  writer (bitmap and PNG entries) decodes exactly in Chromium.
 - Edits (`onmodel edit`): a candidate's saved conversation is continued with one
   change, so the model alters the picture it made instead of painting a new one. The
   result is keyed, sized and measured, measured against its parent (pixels changed,
