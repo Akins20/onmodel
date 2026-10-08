@@ -11,6 +11,7 @@ import { measureAction, paletteDelta, normalisePair, iou, silhouette, HARD_FLAGS
 import { packActions, atlasJSON, atlasCSS, atlasHeader } from "./atlas.mjs";
 import { encodeAPNG, encodeGIF } from "./anim.mjs";
 import { generate, preambleParts, slug } from "./generate.mjs";
+import { spriteImageCounts } from "./plan.mjs";
 import { renderContactHTML, renderSpritesHTML } from "./html.mjs";
 
 /**
@@ -498,10 +499,12 @@ export async function makeSprites({ config, name, subject = null, judge = true, 
   const { parts: singleParts } = await preambleParts(config, decisions, key, { layout: "single" });
   const ledgerPath = path.join(config.out, config.ledger);
   const client = new ImageClient({ model: config.model, thinking: config.thinking, pricing: config.pricing, ledgerPath, runLabel: `${label}:sprites`, budgetUSD: config.budgetUSD, fetch: fetchImpl });
-  const minimum = client.estimate({ images: sp.actions.length, size: config.size });
-  const most = client.estimate({ images: sp.actions.reduce((t, a) => t + 1 + sp.retries + a.frames * sp.frameRetries, 0), size: config.size });
-  log(`  ${label}: ${sp.actions.length} action${sp.actions.length === 1 ? "" : "s"} at ${cell.width}x${cell.height}${sheet ? `, held to sheet candidate ${sheet.pick}` : ""}, about $${(minimum ?? 0).toFixed(2)} if every strip lands first time, at most $${(most ?? 0).toFixed(2)} with every retry\n`);
-  client.assertBudget(sp.actions.length, config.size);
+  // The same image counts `price` uses: every strip of a long action, and the judged repairs.
+  const counts = spriteImageCounts(sp, sp.actions, { judge });
+  const minimum = client.estimate({ images: counts.best, size: config.size });
+  const most = client.estimate({ images: counts.worst, size: config.size });
+  log(`  ${label}: ${sp.actions.length} action${sp.actions.length === 1 ? "" : "s"} at ${cell.width}x${cell.height}${sheet ? `, held to sheet candidate ${sheet.pick}` : ""}, about $${(minimum ?? 0).toFixed(2)} if every strip lands first time, at most $${(most ?? 0).toFixed(2)} with every retry and repaint (images only)\n`);
+  client.assertBudget(counts.best, config.size);
 
   const references = [...(sheet ? [sheet.source] : []), ...config.references];
   const labels = [...(sheet ? ["Model sheet: the character's front, side and back views"] : []), ...config.references.map((r, i) => `Reference ${i + 1}: ${path.basename(r)}`)];

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { estimatePlan } from "../src/plan.mjs";
+import { estimatePlan, spriteImageCounts } from "../src/plan.mjs";
 import { DEFAULTS, merge, validate } from "../src/config.mjs";
 
 /**
@@ -58,6 +58,16 @@ test("a sprite plan is a best-to-worst range: strips, retries, frame repaints an
   assert.equal(it.judgeCallsWorst, 1 + 2 * (1 + 1), "worst: plus the second judgement of each repair pass");
   assert.ok(it.worst > it.best, "the range is real");
   assert.ok(p.assumptions.some((a) => /repainted/.test(a)));
+});
+
+test("the sprite image counts are one formula: long actions count every strip, and an unjudged run has no judged repairs", () => {
+  const sp = { stripFrames: 8, retries: 2, frameRetries: 1, judgeRepairs: 1 };
+  const actions = [{ name: "walk", frames: 6 }, { name: "run", frames: 10 }];
+  assert.deepEqual(
+    [spriteImageCounts(sp, actions).best, spriteImageCounts(sp, actions).worst],
+    [3, 3 * 3 + 16 + 16],
+  );
+  assert.equal(spriteImageCounts(sp, actions, { judge: false }).worst, 3 * 3 + 16, "no judge, no judged repairs");
 });
 
 test("a plan that is not the workload asked for is refused, not priced as another", () => {

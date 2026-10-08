@@ -16,6 +16,24 @@ const JUDGE_THINKING = { off: 0, low: 600, medium: 1800, high: 3500 };
 /** Adds costs, any of which may be null (unpriced); the sum is null if any part is. */
 const add = (...parts) => (parts.some((p) => p == null) ? null : round(parts.reduce((t, p) => t + p, 0)));
 
+/**
+ * How many images a sprite run paints, best and worst, for one shared formula that
+ * `price` and the sprites run's own pre-run estimate both use: the best is one pass
+ * of each strip; the worst is every strip painted 1 + retries times, every frame
+ * repainted frameRetries times, and (when judged) every judged-repair pass
+ * repainting every frame.
+ */
+export function spriteImageCounts(sp, actions, { judge = true } = {}) {
+  const stripFrames = sp?.stripFrames ?? 8;
+  const retries = sp?.retries ?? 2;
+  const frameRetries = sp?.frameRetries ?? 1;
+  const judgeRepairs = judge ? sp?.judgeRepairs ?? 1 : 0;
+  const stripsOf = (frames) => Math.max(1, Math.ceil(frames / stripFrames));
+  const frames = actions.reduce((t, a) => t + a.frames, 0);
+  const strips = actions.reduce((t, a) => t + stripsOf(a.frames), 0);
+  return { best: strips, worst: strips * (1 + retries) + frames * frameRetries + frames * judgeRepairs, retries, frameRetries, judgeRepairs };
+}
+
 /** Refuses a plan that is not the workload asked for, rather than pricing a different one. */
 function validatePlan(config, { subjects, count, sprites }) {
   if (!(Number.isInteger(subjects) && subjects >= 0)) throw new Error("--subjects must be a whole number, such as --subjects 8");
@@ -56,18 +74,11 @@ export function estimatePlan(config, { subjects = 0, count = null, size = null, 
   }
 
   if (sprites.length) {
-    const sp = config.sprite ?? {};
-    const stripFrames = sp.stripFrames ?? 8;
-    const retries = sp.retries ?? 2;
-    const frameRetries = sp.frameRetries ?? 1;
-    const judgeRepairs = sp.judgeRepairs ?? 1;
-    const stripsOf = (frames) => Math.max(1, Math.ceil(frames / stripFrames));
-    const frames = sprites.reduce((t, a) => t + a.frames, 0);
+    const counts = spriteImageCounts(config.sprite, sprites, { judge });
+    const { retries, frameRetries, judgeRepairs } = counts;
     const sheetImages = n; // the sheet runs the candidate loop
-    const best = sheetImages + sprites.reduce((t, a) => t + stripsOf(a.frames), 0);
-    // Every strip painted 1 + retries times, every frame repainted frameRetries times,
-    // and every judged-repair pass repainting every frame, each pass judged again.
-    const worst = sheetImages + sprites.reduce((t, a) => t + stripsOf(a.frames) * (1 + retries), 0) + frames * frameRetries + frames * judgeRepairs;
+    const best = sheetImages + counts.best;
+    const worst = sheetImages + counts.worst;
     const judgeBest = judge ? 1 + sprites.length : 0;
     const judgeWorst = judge ? 1 + sprites.length * (1 + judgeRepairs) : 0;
     const judgeCost = (calls) => (judge ? add(judgeOf(n), ...Array.from({ length: calls - 1 }, () => judgeOf(2))) : 0);
@@ -81,7 +92,7 @@ export function estimatePlan(config, { subjects = 0, count = null, size = null, 
       best: add(imagesOf(best), judgeCost(judgeBest)),
       worst: add(imagesOf(worst), judgeCost(judgeWorst)),
     });
-    assumptions.push(`sprites: best is one strip per action with no retries or repaints; worst is every strip painted ${1 + retries} times, every frame repainted ${frameRetries} time${frameRetries === 1 ? "" : "s"}, and ${judgeRepairs} judged repair pass${judgeRepairs === 1 ? "" : "es"} repainting every frame and judged again.`);
+    assumptions.push(`sprites: best is one strip per action with no retries or repaints; worst is every strip painted ${1 + retries} times, every frame repainted ${frameRetries} time${frameRetries === 1 ? "" : "s"}${judge ? `, and ${judgeRepairs} judged repair pass${judgeRepairs === 1 ? "" : "es"} repainting every frame and judged again` : ""}.`);
   }
 
   if (!items.length) {
