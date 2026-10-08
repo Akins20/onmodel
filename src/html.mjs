@@ -174,6 +174,11 @@ export function renderSpritesHTML(summary, dir) {
       const attempts = a.attempts
         .map((t) => (t.source ? `<figure class="${t.index === a.best ? "best" : ""}"><img loading="lazy" src="${esc(relativeSrc(dir, t.source))}" alt=""><figcaption>strip ${t.index}${t.index === a.best ? " (used)" : ""}: ${t.slicing?.found}/${a.frames} poses, ${esc(t.slicing?.method)}${t.flagged?.length ? `, flagged ${t.flagged.map((x) => x + 1).join(", ")}` : ""}${t.note ? `<br>asked to fix: ${esc(t.note)}` : ""}</figcaption></figure>` : `<figure><figcaption class="warn">strip ${t.index}: not painted (${esc(t.blocked)})</figcaption></figure>`))
         .join("");
+      const repairs = a.judgeRepairs?.length
+        ? `<p class="k">Repaired for the judge</p><ul>${a.judgeRepairs
+            .map((r) => `<li>pass ${r.pass}: ${r.frames.map((x) => `frame ${x.frame + 1} (${esc(x.fix)}) ${x.accepted ? "passed the measurements" : `<span class="warn">failed them${x.flags ? `: ${esc(x.flags.join(", "))}` : ""}</span>`}`).join("; ")}. Score ${r.before.score} to ${r.after?.score ?? "n/a"}: ${r.kept ? '<span class="okc">kept</span>' : "put back"}</li>`)
+            .join("")}</ul>`
+        : "";
       const fixes = a.fixes?.length ? `<p class="k">Repainted frames</p><ul>${a.fixes.map((x) => `<li>frame ${x.frame + 1}, try ${x.attempt}: ${esc((x.before ?? []).join(", ") || "none")} to ${esc((x.after ?? []).join(", ") || "none")}, ${x.accepted ? '<span class="okc">kept</span>' : "dropped"}</li>`).join("")}</ul>` : "";
       const j = a.judgement;
       const judge = j && !j.error ? `<div class="judge">${scoreBar("reads as", j.reads_as)}${scoreBar("on model", j.on_model)}${scoreBar("smooth", j.smooth)}<p class="meta">Verdict: <b class="${j.verdict === "keep" ? "okc" : "warn"}">${esc(j.verdict)}</b></p>${j.problems?.length ? `<p class="k">Problems</p><ul>${j.problems.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}${j.frame_notes?.length ? `<p class="k">Frame notes</p><ul>${j.frame_notes.map((n) => `<li>frame ${n.frame}: ${esc(n.note)}</li>`).join("")}</ul>` : ""}</div>` : j?.error ? `<p class="warn">The judge failed: ${esc(j.error)}</p>` : "";
@@ -182,6 +187,7 @@ export function renderSpritesHTML(summary, dir) {
 <p class="meta">${esc(a.motion)} · ${a.frames} frames at ${a.fps} fps · ${esc(a.facing)} · ${a.loop ? "loops" : "plays once"} · ${a.attempts.length} strip${a.attempts.length === 1 ? "" : "s"}${a.fixes?.length ? `, ${a.fixes.length} repaint${a.fixes.length === 1 ? "" : "s"}` : ""}${a.final?.meanIoU != null ? ` · shape match ${a.final.meanIoU}` : ""}${a.stopped ? ` · <span class="warn">stopped: ${esc(a.stopped)}</span>` : ""}</p>
 <div class="row play"><figure><img class="checker" src="${esc(relativeSrc(dir, a.files?.preview))}" alt="" style="${imgStyle}"><figcaption>playing</figcaption></figure>${mirrored}<div class="frames">${frames}</div></div>
 ${judge}
+${repairs}
 <p class="k">Strips</p><div class="attempts">${attempts}</div>
 ${fixes}
 </section>`;

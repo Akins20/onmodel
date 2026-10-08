@@ -62,9 +62,12 @@ function fakeApi(script = {}) {
     const ok = (json) => ({ ok: true, status: 200, json: async () => json });
     if (u.includes("gemini-3.8-flash:generateContent")) {
       const props = body.generationConfig.responseSchema.properties;
-      const data = props.reads_as
-        ? { reads_as: 82, on_model: 90, smooth: 86, problems: [], frame_notes: [{ frame: 2, note: "the mouth could open wider" }], verdict: "keep" }
-        : { candidates: [1, 2, 3].map((index) => ({ index, on_brief: 70 + index, on_model: 100, craft: 80, problems: [], strengths: [] })), pick: 2, reason: "The views agree.", edit: "" };
+      let data;
+      if (props.reads_as) {
+        const asked = body.contents[0].parts.map((p) => p.text ?? "").join("\n").match(/## Action\n"([^"]+)"/)?.[1];
+        counters[`judge:${asked}`] = (counters[`judge:${asked}`] ?? 0) + 1;
+        data = script.judge?.(asked, counters[`judge:${asked}`]) ?? { reads_as: 82, on_model: 90, smooth: 86, problems: [], frame_notes: [{ frame: 2, note: "the mouth could open wider" }], fix_frames: [], verdict: "keep" };
+      } else data = { candidates: [1, 2, 3].map((index) => ({ index, on_brief: 70 + index, on_model: 100, craft: 80, problems: [], strengths: [] })), pick: 2, reason: "The views agree.", edit: "" };
       return ok({ candidates: [{ content: { parts: [{ text: JSON.stringify(data) }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 2000, candidatesTokenCount: 150, thoughtsTokenCount: 600, totalTokenCount: 2750 } });
     }
     const prompt = body.contents[body.contents.length - 1].parts.at(-1).text;
@@ -344,6 +347,54 @@ test("pixel mode places frames on the grid, with one palette and hard alpha acro
   }
   const preview = decodePNG(await readFile(result.actions[0].files.preview));
   assert.equal(preview.width, 128, "previews are enlarged with hard pixels so people can see them");
+});
+
+const REDO = { reads_as: 60, on_model: 50, smooth: 70, problems: ["frame 2 eye turns to face the viewer"], frame_notes: [], fix_frames: [{ frame: 2, fix: "draw the eye in side profile, as on the model sheet" }], verdict: "redo" };
+const KEEP = { reads_as: 80, on_model: 88, smooth: 84, problems: [], frame_notes: [], fix_frames: [], verdict: "keep" };
+const WORSE = { reads_as: 50, on_model: 40, smooth: 60, problems: ["now frame 2 is worse"], frame_notes: [], fix_frames: [{ frame: 2, fix: "x" }], verdict: "redo" };
+const oneAction = { sprite: { frame: 64, actions: [{ name: "chomp", frames: 4, motion: "chomping" }], retries: 0, frameRetries: 0, judgeRepairs: 1 } };
+
+test("when the judge says redo, its named frame is repainted with its fix, and a better second judgement keeps the repair", async () => {
+  const { config } = await setup(oneAction);
+  const api = fakeApi({ judge: (name, n) => (n === 1 ? REDO : KEEP) });
+  await withKey(() => makeSheet({ config, subject: "a round red creature", name: "player", fetch: api.fetchImpl, log: quiet }));
+  const result = await withKey(() => makeSprites({ config, name: "player", fetch: api.fetchImpl, log: quiet }));
+  const chomp = result.actions[0];
+  assert.equal(chomp.judgeRepairs.length, 1);
+  const [repair] = chomp.judgeRepairs;
+  assert.equal(repair.kept, true);
+  assert.deepEqual([repair.before.score, repair.after.score], [60, 84]);
+  assert.equal(repair.frames[0].frame, 1, "frame 2, counted from 0");
+  assert.equal(repair.frames[0].accepted, true, "the repaint passed the measurements");
+  assert.equal(chomp.judgement.verdict, "keep", "the second judgement is the one reported");
+  const repaint = api.calls.find((c) => /Paint frame 2 of 4/.test(c.body.contents?.[0]?.parts?.at(-1)?.text ?? ""));
+  assert.match(repaint.body.contents[0].parts.at(-1).text, /What to fix in this frame: draw the eye in side profile, as on the model sheet/);
+  const html = await readFile(result.htmlPath, "utf8");
+  assert.match(html, /Repaired for the judge/);
+  assert.match(html, /Score 60 to 84: <span class="okc">kept/);
+});
+
+test("a repair the second judgement scores worse is put back", async () => {
+  const { config } = await setup(oneAction);
+  const api = fakeApi({ judge: (name, n) => (n === 1 ? REDO : WORSE) });
+  await withKey(() => makeSheet({ config, subject: "a round red creature", name: "player", fetch: api.fetchImpl, log: quiet }));
+  const result = await withKey(() => makeSprites({ config, name: "player", fetch: api.fetchImpl, log: quiet }));
+  const chomp = result.actions[0];
+  assert.equal(chomp.judgeRepairs[0].kept, false);
+  assert.equal(chomp.judgement.verdict, "redo", "the first judgement stands, since the repair was put back");
+  assert.equal(chomp.judgement.on_model, 50);
+});
+
+test("a judged repaint that breaks the measurements is rejected before the judge is asked again", async () => {
+  const { config } = await setup(oneAction);
+  const api = fakeApi({ judge: () => REDO, frame: () => [{ shape: "bar" }] });
+  await withKey(() => makeSheet({ config, subject: "a round red creature", name: "player", fetch: api.fetchImpl, log: quiet }));
+  const result = await withKey(() => makeSprites({ config, name: "player", fetch: api.fetchImpl, log: quiet }));
+  const chomp = result.actions[0];
+  assert.equal(chomp.judgeRepairs[0].frames[0].accepted, false);
+  assert.ok(chomp.judgeRepairs[0].frames[0].flags.includes("shape"));
+  assert.equal(chomp.judgeRepairs[0].kept, false);
+  assert.equal(api.counters["judge:chomp"], 1, "no second judgement for a repair that was never applied");
 });
 
 test("sprite settings are checked in plain words and the --actions shorthand reads", () => {

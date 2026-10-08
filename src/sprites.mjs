@@ -63,7 +63,7 @@ export function stripSubject({ character, action, count, hasSheet, note = "" }) 
 }
 
 /** The subject for one frame repainted alone between its neighbours. */
-export function frameSubject({ character, action, index, count, hasSheet, hasNeighbours }) {
+export function frameSubject({ character, action, index, count, hasSheet, hasNeighbours, fix = null }) {
   const facing = FACING[action.facing] ?? FACING.right;
   const like = [hasSheet ? "the model sheet" : null, hasNeighbours ? "the neighbouring frames shown" : null].filter(Boolean).join(" and ");
   return [
@@ -71,8 +71,11 @@ export function frameSubject({ character, action, index, count, hasSheet, hasNei
     character,
     `Action "${action.name}": ${action.motion}.`,
     `Paint frame ${index + 1} of ${count} of this action: one single pose, ${facing}${like ? `, the same character at the same size as ${like}` : ""}${hasNeighbours ? ", the pose that comes between them" : ""}.`,
+    fix ? `What to fix in this frame: ${fix}` : "",
     "Paint it now.",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 const listFrames = (xs) => (xs.length === 1 ? `frame ${xs[0]}` : `frames ${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
@@ -234,9 +237,14 @@ export const ACTION_JUDGEMENT = {
       type: "ARRAY",
       items: { type: "OBJECT", properties: { frame: { type: "INTEGER" }, note: { type: "STRING" } }, required: ["frame", "note"] },
     },
+    fix_frames: {
+      type: "ARRAY",
+      description: "the frames that need repainting, numbered from 1, each with the one change that would put it right; empty when none do",
+      items: { type: "OBJECT", properties: { frame: { type: "INTEGER" }, fix: { type: "STRING" } }, required: ["frame", "fix"] },
+    },
     verdict: { type: "STRING", enum: ["keep", "redo"] },
   },
-  required: ["reads_as", "on_model", "smooth", "problems", "frame_notes", "verdict"],
+  required: ["reads_as", "on_model", "smooth", "problems", "frame_notes", "fix_frames", "verdict"],
 };
 
 const factsOf = (f) =>
@@ -255,7 +263,7 @@ async function judgeAction({ client, config, decisions, sheet, action, placed, m
   const scale = Math.max(1, Math.floor(160 / Math.max(placed[0].width, placed[0].height)));
   const parts = [
     text(
-      "You are judging a short animation for a real product: the frames of one action, in order. Say whether, played in order, they read as the named action, whether every frame is the same character, and whether the motion is smooth. The measured facts given are true; do not contradict them. A settled decision is never a problem. Say keep, or redo when the action does not read or a frame breaks it.",
+      "You are judging a short animation for a real product: the frames of one action, in order. Say whether, played in order, they read as the named action, whether every frame is the same character, and whether the motion is smooth. The measured facts given are true; do not contradict them. They cover the silhouette, size and colours, not the features inside, so look hard at eyes, mouth and markings. A settled decision is never a problem. Say keep, or redo when the action does not read or a frame breaks it, and list in fix_frames each frame to repaint with the one change that would put it right, in the imperative (for example: draw the eye in side profile, as on the model sheet).",
     ),
     text(briefSection(config.briefText)),
   ];
@@ -326,33 +334,23 @@ async function runAction({ action, character, client, rowParts, singleParts, ref
   for (const i of [...measured.flagged]) {
     if (record.stopped) break;
     for (let k = 1; k <= sp.frameRetries; k++) {
-      const prev = i > 0 ? frames[i - 1] : action.loop && count > 2 ? frames[count - 1] : null;
-      const next = i < count - 1 ? frames[i + 1] : action.loop && count > 2 ? frames[0] : null;
-      const refs = [...(sheet ? [sheet.source] : []), ...(prev ? [onKey(prev, key)] : []), ...(next ? [onKey(next, key)] : [])];
-      const refLabels = [...(sheet ? ["Model sheet: the character's front, side and back views"] : []), ...(prev ? ["The frame before"] : []), ...(next ? ["The frame after"] : [])];
-      let res;
-      try {
-        res = await client.generate({ prompt: frameSubject({ character, action, index: i, count, hasSheet: Boolean(sheet), hasNeighbours: Boolean(prev || next) }), parts: singleParts, references: refs, labels: refLabels, aspectRatio: "1:1", size: config.size, op: `${action.name}#frame${i + 1}.${k}` });
-      } catch (err) {
-        if (err.code !== "BUDGET") throw err;
-        record.stopped = err.message;
-        log(`    ${action.name}: stopped, ${err.message}\n`);
+      const got = await repaintFrame({ client, singleParts, character, action, frames, index: i, key, config, sheet, adir, tag: `fix${k}` });
+      if (got.stopped) {
+        record.stopped = got.stopped;
+        log(`    ${action.name}: stopped, ${got.stopped}\n`);
         break;
       }
-      const fix = { frame: i, attempt: k, costUSD: res.costUSD, accepted: false, before: measured.frames[i].flags };
+      const fix = { frame: i, attempt: k, costUSD: got.costUSD, accepted: false, before: measured.frames[i].flags };
       record.fixes.push(fix);
-      if (res.blocked || !res.images.length) {
-        fix.blocked = res.blocked;
+      if (!got.frame) {
+        fix.blocked = got.blocked;
         continue;
       }
-      const keyed = keyOut(decodeImage(res.images[0].buffer), key, config.key).image;
-      const candidate = trim(keyed);
+      fix.source = got.source;
       const trial = frames.slice();
-      trial[i] = candidate;
+      trial[i] = got.frame;
       const remeasured = measureAction(trial, { reference, thresholds, loop: action.loop });
       fix.after = remeasured.frames[i].flags;
-      fix.source = path.join(adir, `frame${i + 1}.fix${k}.source.${res.images[0].mimeType === "image/png" ? "png" : "jpg"}`);
-      await writeFile(fix.source, res.images[0].buffer);
       if (frameBadness(remeasured.frames[i]) < frameBadness(measured.frames[i])) {
         fix.accepted = true;
         frames = trial;
@@ -362,8 +360,35 @@ async function runAction({ action, character, client, rowParts, singleParts, ref
       if (!measured.frames[i].flags.some((x) => HARD_FLAGS.includes(x))) break;
     }
   }
-  record.final = { flagged: measured.flagged, jumps: measured.jumps, meanIoU: measured.meanIoU, minIoU: measured.minIoU, frames: measured.frames, thresholds: measured.thresholds };
-  return { record, frames, measured };
+  record.final = finalFacts(measured);
+  return { record, frames, measured, reference, thresholds };
+}
+
+const finalFacts = (m) => ({ flagged: m.flagged, jumps: m.jumps, meanIoU: m.meanIoU, minIoU: m.minIoU, frames: m.frames, thresholds: m.thresholds });
+
+/**
+ * Repaints one frame alone, with the sheet and its neighbours shown on the key
+ * colour; `fix` is a change the judge asked for. Returns the keyed, trimmed frame,
+ * or why there is none.
+ */
+async function repaintFrame({ client, singleParts, character, action, frames, index, key, config, sheet, adir, tag, fix = null }) {
+  const count = frames.length;
+  const prev = index > 0 ? frames[index - 1] : action.loop && count > 2 ? frames[count - 1] : null;
+  const next = index < count - 1 ? frames[index + 1] : action.loop && count > 2 ? frames[0] : null;
+  const references = [...(sheet ? [sheet.source] : []), ...(prev ? [onKey(prev, key)] : []), ...(next ? [onKey(next, key)] : [])];
+  const labels = [...(sheet ? ["Model sheet: the character's front, side and back views"] : []), ...(prev ? ["The frame before"] : []), ...(next ? ["The frame after"] : [])];
+  let res;
+  try {
+    res = await client.generate({ prompt: frameSubject({ character, action, index, count, hasSheet: Boolean(sheet), hasNeighbours: Boolean(prev || next), fix }), parts: singleParts, references, labels, aspectRatio: "1:1", size: config.size, op: `${action.name}#frame${index + 1}.${tag}` });
+  } catch (err) {
+    if (err.code !== "BUDGET") throw err;
+    return { stopped: err.message };
+  }
+  if (res.blocked || !res.images.length) return { blocked: res.blocked ?? "no image in the answer", costUSD: res.costUSD };
+  const painted = res.images[0];
+  const source = path.join(adir, `frame${index + 1}.${tag}.source.${painted.mimeType === "image/png" ? "png" : "jpg"}`);
+  await writeFile(source, painted.buffer);
+  return { frame: trim(keyOut(decodeImage(painted.buffer), key, config.key).image), source, costUSD: res.costUSD };
 }
 
 export async function makeSprites({ config, name, subject = null, judge = true, useSheet = true, sheetPick = null, fetch: fetchImpl, log = (s) => process.stderr.write(s) }) {
@@ -403,17 +428,104 @@ export async function makeSprites({ config, name, subject = null, judge = true, 
   // Place every finished action at its own shared scale, then one palette for the
   // whole sprite in pixel mode, so no colour flickers between frames or actions.
   const finished = results.filter((r) => r.frames);
-  for (const r of finished) {
+  const placeRaw = (r) => {
     const scale = actionScale(r.frames, { width: cell.width, height: cell.height, fill: sp.fill });
-    r.placed = placeFrames(r.frames, { width: cell.width, height: cell.height, fill: sp.fill, anchor: sp.anchor, filter: config.pixel ? "box" : "auto", scale });
     r.record.scale = round(scale, 4);
-  }
+    return placeFrames(r.frames, { width: cell.width, height: cell.height, fill: sp.fill, anchor: sp.anchor, filter: config.pixel ? "box" : "auto", scale });
+  };
+  for (const r of finished) r.placed = placeRaw(r);
   let palette = null;
-  if ((config.pixel || config.quantize) && finished.length) {
-    palette = config.palette.length ? config.palette : sharedPalette(finished.flatMap((r) => r.placed), config.pixel?.colors ?? 16);
-    for (const r of finished) r.placed = r.placed.map((f) => quantize(f, { palette }).image);
+  if ((config.pixel || config.quantize) && finished.length) palette = config.palette.length ? config.palette : sharedPalette(finished.flatMap((r) => r.placed), config.pixel?.colors ?? 16);
+  const finalise = (placed) => {
+    let out = placed;
+    if (palette) out = out.map((f) => quantize(f, { palette }).image);
+    if (config.pixel) out = out.map((f) => hardenAlpha(f));
+    return out;
+  };
+  for (const r of finished) r.placed = finalise(r.placed);
+
+  // The judge looks inside the silhouette, where the measurements cannot see. When
+  // it says redo and names frames, those frames are repainted with its fix; a
+  // repaint must still pass the measurements, and a second judgement decides
+  // whether the repaired action is kept or put back as it was.
+  let judgeSummary = null;
+  if (judge && finished.length) {
+    const judgeClient = new JudgeClient({ model: config.judge, thinking: config.judgeThinking, pricing: config.pricing, ledgerPath, runLabel: `${label}:sprites`, fetch: fetchImpl });
+    const scoreOf = (j) => (j && !j.error ? round((j.reads_as + j.on_model + j.smooth) / 3, 1) : -1);
+    const verdictLine = (j) => `judge ${j.verdict}, reads as ${j.reads_as}, on model ${j.on_model}, smooth ${j.smooth}`;
+    for (const r of finished) {
+      const action = sp.actions.find((a) => a.name === r.record.name);
+      const ask = (placed, measured) => judgeAction({ client: judgeClient, config, decisions, sheet, action, placed, measured, label });
+      try {
+        r.record.judgement = await ask(r.placed, r.measured);
+        log(`    ${r.record.name}: ${verdictLine(r.record.judgement)}\n`);
+      } catch (err) {
+        r.record.judgement = { error: err.message };
+        log(`    ${r.record.name}: judge failed, ${err.message}\n`);
+        continue;
+      }
+      r.record.judgeRepairs = [];
+      for (let pass = 1; pass <= sp.judgeRepairs; pass++) {
+        const before = r.record.judgement;
+        if (before.verdict !== "redo" || !before.fix_frames?.length || r.record.stopped) break;
+        const repair = { pass, before: { verdict: before.verdict, score: scoreOf(before) }, frames: [], kept: false };
+        r.record.judgeRepairs.push(repair);
+        let frames = r.frames.slice();
+        let measured = r.measured;
+        for (const { frame, fix } of before.fix_frames.slice(0, 3)) {
+          const i = frame - 1;
+          if (!(i >= 0 && i < frames.length)) continue;
+          const got = await repaintFrame({ client, singleParts, character, action, frames, index: i, key, config, sheet, adir: r.record.dir, tag: `judged${pass}`, fix });
+          if (got.stopped) {
+            r.record.stopped = got.stopped;
+            log(`    ${action.name}: stopped, ${got.stopped}\n`);
+            break;
+          }
+          const entry = { frame: i, fix, costUSD: got.costUSD, accepted: false };
+          repair.frames.push(entry);
+          if (!got.frame) {
+            entry.blocked = got.blocked;
+            continue;
+          }
+          entry.source = got.source;
+          const trial = frames.slice();
+          trial[i] = got.frame;
+          const remeasured = measureAction(trial, { reference: r.reference, thresholds: r.thresholds, loop: action.loop });
+          entry.flags = remeasured.frames[i].flags;
+          if (!entry.flags.some((x) => HARD_FLAGS.includes(x))) {
+            entry.accepted = true;
+            frames = trial;
+            measured = remeasured;
+          }
+          log(`    ${action.name} frame ${frame} repainted for the judge (${fix}): ${entry.accepted ? "passes the measurements" : `rejected by the measurements, ${entry.flags.join(", ")}`}\n`);
+        }
+        if (!repair.frames.some((x) => x.accepted)) break;
+        const saved = { frames: r.frames, measured: r.measured, placed: r.placed, scale: r.record.scale };
+        r.frames = frames;
+        r.measured = measured;
+        r.placed = finalise(placeRaw(r));
+        let after;
+        try {
+          after = await ask(r.placed, r.measured);
+        } catch (err) {
+          after = { error: err.message };
+        }
+        repair.after = after.error ? { error: after.error } : { verdict: after.verdict, score: scoreOf(after) };
+        if (!after.error && scoreOf(after) >= scoreOf(before)) {
+          repair.kept = true;
+          r.record.judgement = after;
+          r.record.final = finalFacts(measured);
+          log(`    ${action.name}: repair kept, ${verdictLine(after)} (score ${repair.before.score} to ${repair.after.score})\n`);
+        } else {
+          Object.assign(r, { frames: saved.frames, measured: saved.measured, placed: saved.placed });
+          r.record.scale = saved.scale;
+          log(`    ${action.name}: repair put back, the second judgement was no better (score ${repair.before.score} to ${repair.after.score ?? "failed"})\n`);
+          break;
+        }
+      }
+    }
+    judgeSummary = judgeClient.summary();
   }
-  if (config.pixel) for (const r of finished) r.placed = r.placed.map((f) => hardenAlpha(f));
 
   const previewScale = config.pixel ? Math.max(1, Math.floor(128 / Math.max(cell.width, cell.height))) : 1;
   const writeAction = async (actionName, frames, fps, folder) => {
@@ -461,21 +573,6 @@ export async function makeSprites({ config, name, subject = null, judge = true, 
     await writeFile(atlas.json, JSON.stringify(atlasJSON(sheetImage, { file: `${label}.png` }), null, 2));
     await writeFile(atlas.css, atlasCSS(sheetImage, { file: `${label}.png`, prefix: label, pixelated: Boolean(config.pixel) }));
     await writeFile(atlas.header, atlasHeader(sheetImage, { file: `${label}.png`, prefix, guard: `${prefix}_ATLAS_H` }));
-  }
-
-  let judgeSummary = null;
-  if (judge && finished.length) {
-    const judgeClient = new JudgeClient({ model: config.judge, thinking: config.judgeThinking, pricing: config.pricing, ledgerPath, runLabel: `${label}:sprites`, fetch: fetchImpl });
-    for (const r of finished) {
-      try {
-        r.record.judgement = await judgeAction({ client: judgeClient, config, decisions, sheet, action: config.sprite.actions.find((a) => a.name === r.record.name), placed: r.placed, measured: r.measured, label });
-        log(`    ${r.record.name}: judge ${r.record.judgement.verdict}, reads as ${r.record.judgement.reads_as}, on model ${r.record.judgement.on_model}, smooth ${r.record.judgement.smooth}\n`);
-      } catch (err) {
-        r.record.judgement = { error: err.message };
-        log(`    ${r.record.name}: judge failed, ${err.message}\n`);
-      }
-    }
-    judgeSummary = judgeClient.summary();
   }
 
   const imageSummary = client.summary();

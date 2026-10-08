@@ -62,6 +62,9 @@ export const DEFAULTS = {
     thresholds: { shape: 0.5, size: 0.15, palette: 15, jump: 0.45 },
     retries: 2,
     frameRetries: 1,
+    // Rounds in which the judge's named frames are repainted with its fix, kept
+    // only when a second judgement scores the action no worse. 0 turns it off.
+    judgeRepairs: 1,
     maxFrames: 8,
   },
   // Refuse to start a call that would carry a run past this many dollars.
@@ -138,6 +141,7 @@ function validateSprite(sp) {
   if (!["bottom", "center", "top"].includes(sp.anchor)) throw new Error("sprite.anchor must be bottom, center or top");
   if (!(Number.isInteger(sp.retries) && sp.retries >= 0 && sp.retries <= 5)) throw new Error("sprite.retries must be from 0 to 5");
   if (!(Number.isInteger(sp.frameRetries) && sp.frameRetries >= 0 && sp.frameRetries <= 3)) throw new Error("sprite.frameRetries must be from 0 to 3");
+  if (!(Number.isInteger(sp.judgeRepairs) && sp.judgeRepairs >= 0 && sp.judgeRepairs <= 2)) throw new Error("sprite.judgeRepairs must be from 0 to 2");
   const checkThresholds = (t, where) => {
     if (!isObject(t)) throw new Error(`${where} must be an object`);
     for (const [k, v] of Object.entries(t)) {
