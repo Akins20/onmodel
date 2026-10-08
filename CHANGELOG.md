@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Store graphics (`onmodel store`): one on-brand hero is painted by the model,
+  full-bleed and without text, judged against the brief like any candidate, and then
+  cropped to cover each target's exact canvas and written as a 24-bit PNG with no
+  alpha, because every store that takes a PNG rejects one that has an alpha channel.
+  Targets, with their sizes and formats read on a dated basis: the Google Play
+  feature graphic (1024 x 500), the Open Graph link preview that also serves an X
+  large card (1200 x 630), and the GitHub repository social preview (1280 x 640).
+  Each is checked for size, no alpha and the target's byte cap; a failure exits 2.
+  The crop is deterministic and free: the only cost is the hero. Screenshot framing
+  (a capture inside a phone, a caption over it) is typesetting over real screens and
+  stays in ui-critic; this is the piece only an image model can make. Live on the
+  Pay in Style brief: two heroes at 2K, drift 4.99, six graphics all passing, the
+  GitHub PNGs 615 and 648 KB under the 1 MB cap, for fourteen cents.
+- A 24-bit RGB PNG writer (colour type 2) beside the RGBA one, and a cover-crop that
+  fills a banner's canvas edge to edge where the contain-fit would letterbox it.
 - Icons (`onmodel icons`): one mark becomes Android adaptive layers at every density
   with the monochrome layer and XML, legacy, round, notification and Play icons; an iOS
   asset catalog with dark and tinted variants plus the layer for Icon Composer; the web

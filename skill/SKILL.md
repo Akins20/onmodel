@@ -1,6 +1,6 @@
 ---
 name: onmodel
-description: Produce production art (icons, illustrations, stickers, pixel sprites) that stays on brand and on model, from a Gemini image model grounded in the product's real brief, palette and references, with every candidate keyed to transparency, measured, sized and judged. Use when a project needs an app icon, empty-state or onboarding art, a sticker, a game sprite or an animated sprite sheet (a character's actions, packed and exported for an engine), any animated sequence that must stay the same thing from frame to frame, or any image that must match an existing style, and when asked to generate, draw, animate or illustrate something for a product.
+description: Produce production art (icons, illustrations, stickers, pixel sprites, store graphics) that stays on brand and on model, from a Gemini image model grounded in the product's real brief, palette and references, with every candidate keyed to transparency, measured, sized and judged. Use when a project needs an app icon, empty-state or onboarding art, a sticker, a game sprite or an animated sprite sheet (a character's actions, packed and exported for an engine), a Play feature graphic or an Open Graph or GitHub link preview, any animated sequence that must stay the same thing from frame to frame, or any image that must match an existing style, and when asked to generate, draw, animate or illustrate something for a product.
 ---
 
 # onmodel: art that stays on model
@@ -72,6 +72,29 @@ read its facts.
    copy `AppIcon.appiconset` into the asset catalog; put `web/*` in the public folder
    and the `head.html` tags in the page head; for Expo, copy `expo/*.png` to
    `./assets` and merge `expo/app.json`. Commit the icons with the mark that made them.
+
+## Store graphics and link previews
+1. **Get the hero's subject right.** `onmodel store --name <run> --subject "<the one
+   scene that sells it>"`. It paints an on-brand hero full-bleed (no text, the stores
+   overlay their own), judges it, and crops it to each target. Keep the key elements
+   off-centre with calm brand space beside them, so a store can lay the app name over
+   it; the subject wrapper asks for this, but a subject that fills every corner leaves
+   nowhere for the overlay. Pass `--mark <logo.png>` to carry a logo in as a reference.
+2. **Choose the targets.** `--targets play-feature,og,github` (all three by default):
+   the Google Play feature graphic (1024x500), the Open Graph preview that also serves
+   an X card (1200x630), and the GitHub social preview (1280x640). `--size 2K` paints a
+   crisper hero, worth it since these are seen large.
+3. **Read the checks before the pictures.** Each graphic is checked for its exact size,
+   no alpha, and the target's byte cap (GitHub's is 1 MB); a failure exits 2. Read the
+   palette drift (under 5 is on brand) and the judge's note on whether the composition
+   left room for an overlay. Then open `store.html` and look at every crop.
+4. **This is the generative half only.** Framing a real screenshot inside a phone with
+   a caption is typesetting, not generation; that is ui-critic's `assets` command, run
+   against the app's captures. Do not try to make screenshot sets here.
+5. **Wire it in.** Upload the feature graphic in Play Console; reference the OG image
+   with `og:image` (and `og:image:width`/`height`) in the page head and the GitHub one
+   under the repository's social preview setting. Commit them with the brief that made
+   them.
 
 ## Sprites and animated sequences
 1. **Sheet first.** `onmodel sheet --subject "<who the character is>" --name <slug>`

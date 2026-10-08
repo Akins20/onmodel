@@ -16,9 +16,9 @@ a person at a terminal. Zero dependencies beyond Node 20.
 It makes single images (icons, illustrations, stickers, empty states) and animated
 sequences: sprite sheets for games and any other run of frames that must stay the same
 thing from frame to frame. Any candidate can be edited by continuing its conversation
-with the model. And one mark becomes every icon Android, iOS, the web and Expo ask for,
-checked against a dated rulebook. Store graphics and link previews are still to come;
-see "What it does not do yet" below before you plan around them.
+with the model. One mark becomes every icon Android, iOS, the web and Expo ask for,
+checked against a dated rulebook. And an on-brand hero becomes the store graphics and
+link previews a listing and a repository need, each at its exact size with no alpha.
 
 ## Quick start
 
@@ -190,6 +190,35 @@ cannot do), so a logo under 48 dp is a warning that says why, never a failure.
 themed icon, as a notification on a dark bar and as a 16 px favicon, then every file
 with its checks and the snippets to paste.
 
+## Store graphics and link previews
+
+```bash
+onmodel store --name shop-promo --subject "the shop's objects grouped on the left, open plum space on the right"
+onmodel store --name shop-promo --targets og,github --size 2K   # just the link previews, crisper
+```
+
+A store needs one thing an image model makes and nothing else can: an on-brand hero.
+`store` paints it (full-bleed, no text, keyed on nothing), judges it against the brief
+like any candidate, then crops that hero to cover each target's exact canvas and writes
+it as a 24-bit PNG with no alpha, because every store that takes a PNG rejects one with
+an alpha channel. The hero is the only cost; the crops are deterministic and free.
+
+- **Google Play feature graphic**, 1024 x 500.
+- **Open Graph link preview**, 1200 x 630, which also serves an X large card.
+- **GitHub repository social preview**, 1280 x 640.
+
+Choose a subset with `--targets`, and pass a `--mark` to carry a logo into the hero as
+a reference. The subject you give is wrapped in a banner's framing: landscape and
+full-bleed, the key elements near the centre because stores crop the sides, and a calm
+area left where a store overlays the app name. Each graphic is checked for its exact
+size, no alpha and the target's byte cap (GitHub's is 1 MB); a failure exits with code
+2. `store.html` shows each hero with its crops, checks and the judge's scores, and the
+sizes are read from the stores' own pages on 2026-10-08 with the source named.
+
+Screenshot framing (a capture inside a phone, a caption over it) is typesetting over
+real screens, not generation; that lives in [ui-critic](https://github.com/Akins20/ui-critic)'s
+`assets` command, where the captures already are.
+
 ## Sprites and sequences
 
 A studio keeps a character on model with a model sheet: the character drawn once from
@@ -324,6 +353,7 @@ For a character, in `<out>/<name>/`:
 | `models [--filter banana]` | the models the key can use, which make images, and the price of each |
 | `generate --subject "..."` | paint a subject from the brief: candidates, keyed, measured, sized, judged |
 | `icons --name x` or `--mark file.png` | every icon Android, iOS, the web and Expo ask for, checked against the rulebook, with mask previews (free) |
+| `store --name x [--subject "..."]` | an on-brand hero painted and judged, then cropped to the Play feature graphic, the Open Graph and the GitHub previews, no alpha |
 | `edit --name x --change "..."` | continue a candidate's conversation with one change; measured against its parent and judged |
 | `sheet --subject "..." --name x` | the model sheet: front, side and back views, sliced and measured |
 | `sprites --name x` | each action as a strip, measured against the sheet, repaired, packed and exported |
@@ -334,7 +364,9 @@ Flags for `generate`: `--name slug`, `--count 3`, `--sizes 64,128`, `--pixel 32[
 auto|#hex|none`, `--size 1K`, `--aspect 1:1`, `--model id`, `--judge id`,
 `--no-judge`, `--budget 2`, `--thinking off|low|medium|high`. For `sprites`:
 `--actions "name:frames[:motion];..."` or a JSON file, `--frame 32`, `--subject "..."`,
-`--pick 2`, `--no-sheet`. For `edit`: `--candidate 2` or `2e1` (the pick by default),
+`--pick 2`, `--no-sheet`. For `store`: `--subject "..."`, `--targets
+play-feature,og,github`, `--mark logo.png`, `--count 3`, `--size 2K`, `--budget 2`,
+`--no-judge`. For `edit`: `--candidate 2` or `2e1` (the pick by default),
 `--change "..."`, `--in dir`, `--no-judge`. For every command:
 `--config`, `--out`, `--brief`, `--json`.
 
@@ -381,9 +413,10 @@ Every knob has a default. Resolution order, lowest to highest: built-in defaults
   candidates. An edited sheet candidate is not yet sliced into new views, and a
   sprite frame is repaired through the measured and judged repaints, not edited
   directly.
-- **Store graphics and link previews.** The Play feature graphic, store screenshot sets
-  and Open Graph images are the next phase, where ui-critic's small `assets` command
-  moves to.
+- **Store screenshot sets.** `store` makes the generative graphics (the feature graphic,
+  the link previews). Framing real screenshots inside a phone with a caption is
+  typesetting, not generation, so it stays in [ui-critic](https://github.com/Akins20/ui-critic)'s
+  `assets` command where the captures already are, rather than being rebuilt here.
 - **Icon Composer files.** Apple's layered `.icon` format is not documented, so the
   tool writes a flattened asset catalog Xcode accepts and the foreground layer and
   background colour to import into Icon Composer by hand.
