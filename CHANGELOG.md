@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Dry-run batch pricing (`onmodel price`): what a planned workload would cost before
+  any of it runs, with no API call. It prices generate runs (`--subjects N` by
+  `--count` at `--size`), a store run (`--store`, the crops free), and sprites
+  (`--sprites "walk:6;run:8"`) as a best-to-worst range, because retries and repaints
+  are decided by what the model sends back; the best is one strip per action, the
+  worst assumes every strip is repainted the full retry count. Images use the pricing
+  page's own per-image figure plus the measured thinking allowance; the judge is a
+  clearly labelled allowance, not a measured cost; references are flagged as adding
+  input tokens the per-image figure leaves out; icons, the store crops and check are
+  listed as free. An unknown model is reported as having no price rather than given an
+  invented one.
 - A no-API gate (`onmodel check`): re-read what a run already wrote and hold it to
   the same rulebook, so a store or a launcher never finds the problem first. It calls
   nothing and costs nothing, and it decodes every raster from disk rather than

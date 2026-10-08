@@ -324,6 +324,20 @@ refused before a cent is spent, and a run whose real thinking ran past the estim
 stops before the call that would pass the cap. `onmodel models` lists the models the
 key can use, which make images, and what each costs.
 
+Before a large batch, `onmodel price` estimates it without calling anything:
+
+```bash
+onmodel price --subjects 8 --count 3 --size 2K      # eight subjects, three each
+onmodel price --sprites "walk:8;run:8;jump:5"        # a sheet and three actions
+onmodel price --store                                # one store run; the crops are free
+```
+
+It prices images from the per-image figure plus the thinking allowance, states the
+judge as an allowance rather than a measured cost, gives sprites as a best-to-worst
+range (one strip per action, up to every strip repainted the full retry count), and
+lists icons, the store crops and check as free. An unknown model is reported as having
+no price, never given an invented one.
+
 ## What you get
 
 In `<out>/<name>/`:
@@ -378,6 +392,7 @@ their recorded size. Any failure exits with code 2, naming the file and the rule
 | `sheet --subject "..." --name x` | the model sheet: front, side and back views, sliced and measured |
 | `sprites --name x` | each action as a strip, measured against the sheet, repaired, packed and exported |
 | `check [--name x \| --in dir]` | re-check written outputs against the rulebook, no API; no target checks every run under `--out`; exits 2 on failure |
+| `price [--subjects N] [--store] [--sprites "..."]` | what a planned batch would cost before it runs, no API |
 | `cost [--out dir]` | what every run has cost so far, from the ledger |
 
 Flags for `generate`: `--name slug`, `--count 3`, `--sizes 64,128`, `--pixel 32[:16]`,
@@ -389,8 +404,9 @@ auto|#hex|none`, `--size 1K`, `--aspect 1:1`, `--model id`, `--judge id`,
 play-feature,og,github`, `--mark logo.png`, `--count 3`, `--size 2K`, `--budget 2`,
 `--no-judge`. For `edit`: `--candidate 2` or `2e1` (the pick by default),
 `--change "..."`, `--in dir`, `--no-judge`. For `check`: `--name x` or `--in dir`,
-else every run under `--out`. For every command: `--config`, `--out`, `--brief`,
-`--json`.
+else every run under `--out`. For `price`: `--subjects N`, `--sprites "name:frames;..."`,
+`--store`, `--count`, `--size`, `--no-judge`. For every command: `--config`, `--out`,
+`--brief`, `--json`.
 
 ## Configuration
 

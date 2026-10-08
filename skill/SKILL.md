@@ -33,7 +33,10 @@ read its facts.
 3. **One subject per run.** `onmodel generate --subject "..." --name <slug>`, with
    `--sizes` for the exact outputs the project needs, `--pixel <grid>` for a sprite.
    Three candidates by default. Say the estimated cost to the user before a large or
-   repeated run; a run of three with the judge is about fifteen cents.
+   repeated run; a run of three with the judge is about fifteen cents. For a batch over
+   several subjects, a sprite sheet or a store run, `onmodel price --subjects N` (or
+   `--sprites`, `--store`) estimates the whole thing first, with no API call, so the
+   user approves a number before it runs.
 4. **Read the facts before the pictures.** In `generate.json` and the progress log:
    a subject that touches the edge is cut off; key residue above a few percent means
    the model painted with the key's hue or the key is too close to the palette; a
