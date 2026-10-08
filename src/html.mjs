@@ -251,6 +251,53 @@ ${summary.candidates.map(card).join("\n")}
   return page(`${summary.name}: store graphics`, STORE_CSS, body);
 }
 
+const VECTOR_CSS = `section.block{max-width:1100px;margin:0 auto 18px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.panes{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}
+.panes figure{margin:0}.panes img{width:100%;max-height:320px;object-fit:contain;display:block;border:1px solid var(--line);border-radius:8px}
+.swatch{display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid var(--line);vertical-align:-2px;margin-right:6px}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;margin:6px 0 0}
+.meta{color:var(--mut);font-size:13px}code{font:13px ui-monospace,SFMono-Regular,Menlo,monospace}`;
+
+export function renderVectorHTML(summary, dir) {
+  const f = summary.facts ?? {};
+  const src = (file) => esc(relativeSrc(dir, file));
+  const pixel = f.mode === "pixel";
+  const look = pixel ? ' style="image-rendering:pixelated"' : "";
+  if (summary.refused) {
+    const body = `<header><h1>${esc(summary.name)} vector</h1><button class="theme" type="button">Dark</button><p class="lead">From ${esc(path.basename(summary.mark))} · ${esc(summary.generatedAt)}</p></header>
+<div class="verdict warn"><b>Not traced.</b> ${esc(summary.refused)}</div>
+<section class="block"><div class="panes"><figure><img class="checker" src="${src(summary.files.source)}" alt=""><figcaption>the source</figcaption></figure></div>
+<p class="meta">Flat-colour art and pixel art trace well; painted, shaded or textured art stays a PNG.</p></section>`;
+    return page(`${summary.name}: vector`, VECTOR_CSS, body);
+  }
+  const rows = [
+    ["Mode", pixel ? "pixel art, traced exactly along pixel edges" : `flat colour, ${f.detail} detail`],
+    ["Size", `${f.width} x ${f.height}`],
+    ["Colours", String(f.colours)],
+    ["Shapes", `${f.layers} layers, ${f.loops} outlines, ${pixel ? `${f.points} points` : `${f.curves} curves`}`],
+    ["SVG", `${Math.max(1, Math.round(f.bytes / 1024))} KB`],
+    ["Silhouette match", String(f.silhouette)],
+    ["Pixels that kept their colour", `${Math.round(f.colourKept * 1000) / 10}%`],
+    ["Colour drift", `${f.drift} (CIE76; snapping to the brand colours counts here)`],
+    ...(pixel ? [] : [["Flat colour", `${Math.round((f.interiorShare ?? 0) * 100)}% of the art, mean error ${f.meanError}`]]),
+  ];
+  const tokens = (summary.tokens ?? []).map((t) => `<tr><td><span class="swatch" style="background:${esc(t.hex)}"></span><code>--${esc(t.name)}</code></td><td>${esc(t.hex)}</td><td class="meta">${t.brand ? "a brief colour" : "not in the brief's palette"}</td></tr>`).join("");
+  const verdictLine = { exact: "<b>Exact.</b> The SVG is the pixel art, every pixel.", good: "<b>A good match.</b> The SVG holds the mark's shape and colours.", approximate: "<b>An approximate match.</b> Look at the red in the difference map before using it.", poor: "<b>A poor match.</b> The trace lost too much of the mark; keep the PNG, or simplify the mark and trace again." }[f.verdict] ?? esc(f.verdict);
+  const body = `<header><h1>${esc(summary.name)} vector</h1><button class="theme" type="button">Dark</button><p class="lead">From ${esc(path.basename(summary.mark))} · traced in ${summary.ms} ms · ${esc(summary.generatedAt)}</p></header>
+<div class="verdict${f.verdict === "poor" ? " warn" : ""}">${verdictLine}</div>
+<section class="block"><div class="panes">
+<figure><img class="checker" src="${src(summary.files.source)}" alt=""${look}><figcaption>the source</figcaption></figure>
+<figure><img class="checker" src="${src(summary.files.svg)}" alt=""${look}><figcaption>the SVG, as this browser draws it</figcaption></figure>
+<figure><img class="checker" src="${src(summary.files.render)}" alt=""${look}><figcaption>the SVG drawn by onmodel, which is what is measured</figcaption></figure>
+<figure><img src="${src(summary.files.diff)}" alt=""${look}><figcaption>where they differ, in red</figcaption></figure>
+</div></section>
+<section class="block"><h2>Facts</h2><table>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("")}</table></section>
+<section class="block"><h2>Colours</h2><p class="meta">Each fill is a CSS variable with the real colour as its fallback: the SVG renders as is anywhere, and follows your theme when it is inlined in a page that sets the variables.</p><table>${tokens}</table>
+<pre>${esc(`:root {\n${(summary.tokens ?? []).map((t) => `  --${t.name}: ${t.hex};`).join("\n")}\n}`)}</pre></section>
+<section class="block"><h2>Files</h2><p class="meta"><code>${esc(path.basename(summary.files.svg))}</code> for the web, Figma and print; <code>android/drawable/${esc(path.basename(summary.files.drawable))}</code> with <code>android/values/${esc(path.basename(summary.files.colours))}</code> for Android (a <code>values-night</code> copy of the colours gives it a dark theme); <code>${esc(path.basename(summary.files.css))}</code> for the variables.</p></section>`;
+  return page(`${summary.name}: vector`, VECTOR_CSS, body);
+}
+
 export function renderSpritesHTML(summary, dir) {
   const pixel = Boolean(summary.pixel);
   const show = Math.max(1, Math.floor(96 / Math.max(summary.cell.width, summary.cell.height)));
