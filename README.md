@@ -20,6 +20,12 @@ with the model. One mark becomes every icon Android, iOS, the web and Expo ask f
 checked against a dated rulebook. And an on-brand hero becomes the store graphics and
 link previews a listing and a repository need, each at its exact size with no alpha.
 
+<p align="center"><img src="https://raw.githubusercontent.com/Akins20/onmodel/main/docs/chomp.gif" width="256" height="256" alt="Chomp, a round cream creature, opening its mouth wide, snapping it shut with its eye squeezed, and opening again, in pixel art"></p>
+
+The player of Chomp, a small maze game, from one `onmodel sprites` run held to its
+model sheet: six 32 px frames in pixel mode, sliced, measured, repaired where the judge
+asked and packed with JSON, CSS and C exports, shown here at 8x. That take cost $0.24.
+
 ## Quick start
 
 ```bash

@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 (2026-10-08)
+
+The first release.
 
 - Sheet edits (`onmodel edit --sheet`): a model sheet is edited by continuing its
   conversation like any candidate, and the edit is cut into its front, side and back
