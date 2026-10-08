@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { makeSheet, makeSprites, stripAspect, stripSubject, frameSubject, retryNote, actionScale, onKey, sharedPalette, rowOnGrey, matchStripScale } from "../src/sprites.mjs";
+import { makeSheet, makeSprites, stripAspect, stripSubject, frameSubject, retryNote, actionScale, onKey, sharedPalette, rowOnGrey, matchStripScale, stripParts } from "../src/sprites.mjs";
 import { measureAction } from "../src/measure.mjs";
 import { DEFAULTS, merge, validate, parseActions } from "../src/config.mjs";
 import { encodePNG, decodePNG, isPNG } from "../src/png.mjs";
@@ -82,10 +82,17 @@ function fakeApi(script = {}) {
       png = paintPoses(script.frame?.(frame, counters[`frame${frame}`]) ?? circles(1), { width: 240, height: 240, radius: 70 });
     } else if ((m = prompt.match(/Action "([^"]+)"/))) {
       const name = m[1];
+      // A strip of a longer action names its frames ("Paint frames 6 to 10 of the 10 frames").
+      const part = prompt.match(/Paint frames (\d+) to (\d+) of the (\d+) frames/);
+      const from = part ? Number(part[1]) : 1;
+      const count = part ? Number(part[2]) - from + 1 : Number((prompt.match(/Paint (\d+) frames/) ?? [0, 1])[1]);
       counters[name] = (counters[name] ?? 0) + 1;
-      const count = Number((prompt.match(/Paint (\d+) frames/) ?? [0, 1])[1]);
-      const scripted = script.strip?.(name, counters[name], count);
-      png = paintPoses(scripted ?? circles(count), { width: 110 * count });
+      counters[`${name}:${from}`] = (counters[`${name}:${from}`] ?? 0) + 1;
+      // The script returns the poses, or { poses, radius } to paint a strip at another scale.
+      const scripted = script.strip?.(name, counters[`${name}:${from}`], count, from);
+      const poses = Array.isArray(scripted) ? scripted : scripted?.poses;
+      const radius = scripted?.radius ?? 35;
+      png = paintPoses(poses ?? circles(count), { width: Math.round((count * radius * 110) / 35), height: Math.round((radius * 120) / 35), radius });
     } else throw new Error(`the fake does not know this prompt: ${prompt.slice(0, 80)}`);
     return ok({ candidates: [{ content: { role: "model", parts: [{ inlineData: { mimeType: "image/png", data: png.toString("base64") } }] }, finishReason: "STOP" }], usageMetadata: USAGE });
   };
@@ -410,11 +417,64 @@ test("a judged repaint that breaks the measurements is rejected before the judge
   assert.equal(api.counters["judge:chomp"], 1, "no second judgement for a repair that was never applied");
 });
 
+test("a long action is split into balanced strips, and each strip after the first says which frames it is", () => {
+  const sizes = (count, size) => stripParts(count, size).map((p) => p.count);
+  assert.deepEqual(sizes(10, 8), [5, 5], "10 at 8 a strip is 5 and 5, not 8 and 2");
+  assert.deepEqual(sizes(8, 8), [8], "an action that fits one strip stays one strip");
+  assert.deepEqual(sizes(13, 6), [5, 4, 4]);
+  assert.deepEqual(stripParts(10, 8).map((p) => [p.from, p.to]), [[0, 4], [5, 9]]);
+  const action = { name: "run", motion: "running", facing: "right", loop: true };
+  const middle = stripSubject({ character: "x", action, count: 5, hasSheet: true, part: { index: 1, of: 3, from: 5, to: 9, total: 15 } });
+  assert.match(middle, /Paint frames 6 to 10 of the 15 frames of this action in a single horizontal row, left to right in the order they play, carrying straight on from the frame shown just before this strip\./);
+  const last = stripSubject({ character: "x", action, count: 5, hasSheet: true, part: { index: 2, of: 3, from: 10, to: 14, total: 15 } });
+  assert.match(last, /the last of them leading smoothly back into the action's first frame, shown\./);
+  const firstOfMany = stripSubject({ character: "x", action, count: 5, hasSheet: true, part: { index: 0, of: 3, from: 0, to: 4, total: 15 } });
+  assert.doesNotMatch(firstOfMany, /carrying straight on|leading smoothly back/);
+});
+
+test("a ten-frame action is painted as two strips, the second shown where to carry on from and brought to the first's scale", async () => {
+  const { config } = await setup({ sprite: { frame: 64, stripFrames: 5, actions: [{ name: "run", frames: 10, motion: "running", loop: true }], retries: 1, frameRetries: 0, judgeRepairs: 0 } });
+  // The second strip comes back painted half as big again, as a fresh generation can.
+  const api = fakeApi({ strip: (name, attempt, count, from) => (from > 1 ? { poses: circles(count), radius: 52 } : null) });
+  await withKey(() => makeSheet({ config, subject: "a round red creature", name: "player", judge: false, fetch: api.fetchImpl, log: quiet }));
+  const result = await withKey(() => makeSprites({ config, name: "player", judge: false, fetch: api.fetchImpl, log: quiet }));
+  const run = result.actions[0];
+  assert.equal(run.parts, 2);
+  assert.deepEqual(run.bestParts, [1, 1]);
+  assert.deepEqual(run.attempts.map((t) => [t.part, t.frames]), [[1, [1, 5]], [2, [6, 10]]]);
+  assert.ok(run.attempts[1].join > 0.9, `the second strip follows on from the first, join ${run.attempts[1].join}`);
+  assert.deepEqual(run.final.flagged, [], "no frame is called the wrong size once the second strip is brought to the first's scale");
+  assert.ok(run.final.frames.every((f) => Math.abs(f.heightRatio - 1) < 0.05), `heights agree: ${run.final.frames.map((f) => f.heightRatio)}`);
+  assert.equal(result.atlas.width, 10 * 64);
+  const second = api.calls.find((c) => /Paint frames 6 to 10 of the 10 frames/.test(c.body.contents?.[0]?.parts?.at(-1)?.text ?? ""));
+  const labels = second.body.contents[0].parts.filter((p) => p.text && !p.text.startsWith("##")).map((p) => p.text);
+  assert.ok(labels.includes("The frame just before this strip: the first frame here follows on from it"), labels.join(" | "));
+  assert.ok(labels.includes("The action's first frame: the last frame here leads back into it"), "a looping action's last strip is shown where it must return to");
+  assert.equal(second.body.generationConfig.imageConfig.aspectRatio, "21:9");
+  const html = await readFile(result.htmlPath, "utf8");
+  assert.match(html, /frames 6 to 10, strip 1 \(used\)/);
+});
+
+test("a strip that does not follow on from the one before is painted again and told so", async () => {
+  const { config } = await setup({ sprite: { frame: 48, stripFrames: 3, actions: [{ name: "roll", frames: 6, motion: "rolling", loop: false }], retries: 1, frameRetries: 0, judgeRepairs: 0 } });
+  const bars = (count) => Array.from({ length: count }, () => ({ shape: "bar" }));
+  const api = fakeApi({ strip: (name, attempt, count, from) => (from > 1 && attempt === 1 ? bars(count) : null) });
+  const result = await withKey(() => makeSprites({ config, name: "ball", subject: "a red ball", useSheet: false, judge: false, fetch: api.fetchImpl, log: quiet }));
+  const roll = result.actions[0];
+  const secondPart = roll.attempts.filter((t) => t.part === 2);
+  assert.equal(secondPart.length, 2);
+  assert.ok(secondPart[0].join < 0.45, `bars do not follow a ball, join ${secondPart[0].join}`);
+  assert.match(secondPart[1].note, /its first frame does not follow on from the frame shown just before this strip/);
+  assert.deepEqual(roll.bestParts, [1, 2]);
+});
+
 test("sprite settings are checked in plain words and the --actions shorthand reads", () => {
   assert.deepEqual(parseActions("walk:6:a steady walk, arms swinging;jump:5"), [{ name: "walk", frames: 6, motion: "a steady walk, arms swinging" }, { name: "jump", frames: 5 }]);
   const bad = (sprite, re) => assert.throws(() => validate(merge(DEFAULTS, { sprite })), re);
-  bad({ actions: [{ name: "walk", frames: 0 }] }, /needs frames from 1 to 8/);
-  bad({ actions: [{ name: "walk", frames: 9 }] }, /needs frames from 1 to 8/);
+  bad({ actions: [{ name: "walk", frames: 0 }] }, /needs frames from 1 to 24/);
+  bad({ actions: [{ name: "walk", frames: 25 }] }, /needs frames from 1 to 24/);
+  bad({ stripFrames: 1 }, /sprite.stripFrames must be from 2 to 8/);
+  bad({ stripFrames: 9 }, /sprite.stripFrames must be from 2 to 8/);
   bad({ actions: [{ name: "walk", frames: 4, facing: "up" }] }, /facing must be one of right, left, front, back/);
   bad({ actions: [{ name: "walk", frames: 4, mirror: "walk" }] }, /used twice/);
   bad({ actions: [{ name: "walk", frames: 4 }, { name: "walk", frames: 2 }] }, /used twice/);

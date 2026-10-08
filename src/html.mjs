@@ -192,7 +192,7 @@ export function renderSpritesHTML(summary, dir) {
         })
         .join("");
       const attempts = a.attempts
-        .map((t) => (t.source ? `<figure class="${t.index === a.best ? "best" : ""}"><img loading="lazy" src="${esc(relativeSrc(dir, t.source))}" alt=""><figcaption>strip ${t.index}${t.index === a.best ? " (used)" : ""}: ${t.slicing?.found}/${a.frames} poses, ${esc(t.slicing?.method)}${t.flagged?.length ? `, flagged ${t.flagged.map((x) => x + 1).join(", ")}` : ""}${t.note ? `<br>asked to fix: ${esc(t.note)}` : ""}</figcaption></figure>` : `<figure><figcaption class="warn">strip ${t.index}: not painted (${esc(t.blocked)})</figcaption></figure>`))
+        .map((t) => (t.source ? `<figure class="${t.used ? "best" : ""}"><img loading="lazy" src="${esc(relativeSrc(dir, t.source))}" alt=""><figcaption>${t.part ? `frames ${t.frames[0]} to ${t.frames[1]}, ` : ""}strip ${t.index}${t.used ? " (used)" : ""}: ${t.slicing?.found}/${t.part ? t.frames[1] - t.frames[0] + 1 : a.frames} poses,${t.join !== undefined ? ` join ${t.join},` : ""} ${esc(t.slicing?.method)}${t.flagged?.length ? `, flagged ${t.flagged.map((x) => x + 1).join(", ")}` : ""}${t.note ? `<br>asked to fix: ${esc(t.note)}` : ""}</figcaption></figure>` : `<figure><figcaption class="warn">strip ${t.index}: not painted (${esc(t.blocked)})</figcaption></figure>`))
         .join("");
       const repairs = a.judgeRepairs?.length
         ? `<p class="k">Repaired for the judge</p><ul>${a.judgeRepairs

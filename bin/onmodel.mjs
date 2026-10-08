@@ -155,7 +155,7 @@ async function main() {
       const lines = result.actions.map((a) =>
         a.error
           ? `  ${a.name}: ${a.error}`
-          : `  ${a.name}: ${a.frames} frames from strip ${a.best} of ${a.attempts.length}${a.fixes.length ? `, ${a.fixes.filter((x) => x.accepted).length}/${a.fixes.length} repaints kept` : ""}, still flagged ${JSON.stringify((a.final?.flagged ?? []).map((i) => i + 1))}${a.judgement?.verdict ? `, judge says ${a.judgement.verdict}` : ""}`,
+          : `  ${a.name}: ${a.frames} frames from ${a.parts > 1 ? `${a.parts} strips (${a.attempts.length} painted)` : `strip ${a.best} of ${a.attempts.length}`}${a.fixes.length ? `, ${a.fixes.filter((x) => x.accepted).length}/${a.fixes.length} repaints kept` : ""}, still flagged ${JSON.stringify((a.final?.flagged ?? []).map((i) => i + 1))}${a.judgement?.verdict ? `, judge says ${a.judgement.verdict}` : ""}`,
       );
       const out = [`${result.name} sprites in ${result.dir}`, ...lines];
       if (result.atlas) out.push(`atlas ${result.atlas.width}x${result.atlas.height}: ${[result.atlas.image, result.atlas.json, result.atlas.css, result.atlas.header].map((f) => path.basename(f)).join(", ")}`);

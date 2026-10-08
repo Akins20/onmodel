@@ -65,7 +65,10 @@ export const DEFAULTS = {
     // Rounds in which the judge's named frames are repainted with its fix, kept
     // only when a second judgement scores the action no worse. 0 turns it off.
     judgeRepairs: 1,
-    maxFrames: 8,
+    // An action longer than stripFrames is painted as several strips, each carrying
+    // on from the last frame of the one before; maxFrames caps an action's length.
+    stripFrames: 8,
+    maxFrames: 24,
   },
   // Refuse to start a call that would carry a run past this many dollars.
   budgetUSD: 2,
@@ -128,7 +131,8 @@ const FACINGS = ["right", "left", "front", "back"];
 /** Checks the sprite block and fills each action's defaults, throwing the first problem in plain words. */
 function validateSprite(sp) {
   if (!isObject(sp)) throw new Error("sprite must be an object");
-  if (!(Number.isInteger(sp.maxFrames) && sp.maxFrames >= 1 && sp.maxFrames <= 12)) throw new Error("sprite.maxFrames must be from 1 to 12");
+  if (!(Number.isInteger(sp.maxFrames) && sp.maxFrames >= 1 && sp.maxFrames <= 48)) throw new Error("sprite.maxFrames must be from 1 to 48");
+  if (!(Number.isInteger(sp.stripFrames) && sp.stripFrames >= 2 && sp.stripFrames <= 8)) throw new Error("sprite.stripFrames must be from 2 to 8 poses a strip");
   if (sp.frame !== null) {
     const m = String(sp.frame).trim().match(/^(\d+)(?:\s*[x×]\s*(\d+))?$/i);
     if (!m) throw new Error('sprite.frame must be a size such as 32 or "64x48", or null');

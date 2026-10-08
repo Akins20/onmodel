@@ -4,10 +4,10 @@ import { ImageClient, JudgeClient, text, imagePart } from "./gemini.mjs";
 import { requireBrief, loadDecisions, briefSection, decisionsSection } from "./brief.mjs";
 import { decodeImage, encodePNG } from "./image.mjs";
 import { decodePNG } from "./png.mjs";
-import { chooseKey, keyOut, quantize, hardenAlpha, fillBackground, blit, resize, medianCut, trim } from "./key.mjs";
+import { chooseKey, keyOut, quantize, hardenAlpha, fillBackground, blit, resize, medianCut, trim, alphaBounds } from "./key.mjs";
 import { toHex } from "./color.mjs";
 import { sliceStrip, placeFrames, mirror } from "./strip.mjs";
-import { measureAction, paletteDelta, HARD_FLAGS } from "./measure.mjs";
+import { measureAction, paletteDelta, normalisePair, iou, silhouette, HARD_FLAGS } from "./measure.mjs";
 import { packActions, atlasJSON, atlasCSS, atlasHeader } from "./atlas.mjs";
 import { encodeAPNG, encodeGIF } from "./anim.mjs";
 import { generate, preambleParts, slug } from "./generate.mjs";
@@ -42,13 +42,20 @@ export function stripAspect(count) {
 }
 
 /** The subject for a strip: the character, the action, and how the row is laid out. */
-export function stripSubject({ character, action, count, hasSheet, note = "" }) {
+export function stripSubject({ character, action, count, hasSheet, note = "", part = null }) {
   const facing = FACING[action.facing] ?? FACING.right;
   const same = hasSheet ? "the same character as the model sheet" : "the same character in every frame";
-  const order =
-    count === 1
-      ? "Paint one frame of this pose."
-      : `Paint ${count} frames of this action in a single horizontal row, left to right in the order they play${action.loop && count > 2 ? ", so the last frame leads smoothly back into the first" : ""}.`;
+  let order;
+  if (part) {
+    // One strip of a longer action: say which frames these are and what they join.
+    const carries = part.index > 0 ? ", carrying straight on from the frame shown just before this strip" : "";
+    const closes = action.loop && part.index === part.of - 1 ? ", the last of them leading smoothly back into the action's first frame, shown" : "";
+    order = `Paint frames ${part.from + 1} to ${part.to + 1} of the ${part.total} frames of this action in a single horizontal row, left to right in the order they play${carries}${closes}.`;
+  } else
+    order =
+      count === 1
+        ? "Paint one frame of this pose."
+        : `Paint ${count} frames of this action in a single horizontal row, left to right in the order they play${action.loop && count > 2 ? ", so the last frame leads smoothly back into the first" : ""}.`;
   return [
     "## Subject",
     character,
@@ -81,16 +88,16 @@ export function frameSubject({ character, action, index, count, hasSheet, hasNei
 const listFrames = (xs) => (xs.length === 1 ? `frame ${xs[0]}` : `frames ${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
 
 /** What went wrong with a strip, in words the painter can act on next time. */
-export function retryNote(slice, measured, count) {
+export function retryNote(slice, measured, count, offset = 0) {
   const bits = [];
   if (slice.method === "equal") bits.push(`it drew ${slice.found} separate pose${slice.found === 1 ? "" : "s"} where ${count} were asked for, or let poses touch`);
   if (slice.method === "merged") bits.push(`it drew ${slice.found} separate pieces where ${count} poses were asked for`);
-  const by = (flag) => measured.frames.filter((f) => f.flags.includes(flag)).map((f) => f.index + 1);
+  const by = (flag) => measured.frames.filter((f) => f.flags.includes(flag)).map((f) => f.index + 1 + offset);
   if (by("shape").length) bits.push(`${listFrames(by("shape"))} changed the character's shape`);
   if (by("size").length) bits.push(`${listFrames(by("size"))} drew the character at a different size`);
   if (by("colour").length) bits.push(`${listFrames(by("colour"))} changed its colours`);
   if (by("empty").length) bits.push(`${listFrames(by("empty"))} came out empty`);
-  if (measured.jumps.length) bits.push(`the motion jumps at ${listFrames(measured.jumps.map((i) => i + 1))}`);
+  if (measured.jumps.length) bits.push(`the motion jumps at ${listFrames(measured.jumps.map((i) => i + 1 + offset))}`);
   return bits.length ? `${bits.join("; ")}.` : "";
 }
 
@@ -277,6 +284,86 @@ async function judgeAction({ client, config, decisions, sheet, action, placed, m
   return data;
 }
 
+/**
+ * An action's frames split into strips of at most `size`, as evenly as possible:
+ * 10 frames at 8 a strip is 5 and 5, not 8 and 2.
+ */
+export function stripParts(count, size) {
+  const n = Math.ceil(count / size);
+  const base = Math.floor(count / n);
+  let extra = count % n;
+  const parts = [];
+  let from = 0;
+  for (let i = 0; i < n; i++) {
+    const len = base + (extra > 0 ? 1 : 0);
+    extra--;
+    parts.push({ from, to: from + len - 1, count: len });
+    from += len;
+  }
+  return parts;
+}
+
+/**
+ * Paints one strip of an action until it is clean or the retries run out, and
+ * returns the best attempt with its frames. A strip after the first is shown the
+ * frame just before it and must follow on from it, which is checked like any
+ * other step; the last strip of a looping action is shown the action's first frame.
+ */
+async function paintPart({ action, part, character, client, rowParts, references, labels, key, config, reference, thresholds, sheet, adir, record, log, previous, first }) {
+  const sp = config.sprite;
+  const multi = part.of > 1;
+  const count = part.to - part.from + 1;
+  const name = multi ? `${action.name} frames ${part.from + 1}-${part.to + 1}` : action.name;
+  const refs = [...references, ...(previous ? [onKey(previous, key)] : []), ...(first ? [onKey(first, key)] : [])];
+  const refLabels = [...labels, ...(previous ? ["The frame just before this strip: the first frame here follows on from it"] : []), ...(first ? ["The action's first frame: the last frame here leads back into it"] : [])];
+  let best = null;
+  let note = "";
+  for (let a = 1; a <= 1 + sp.retries; a++) {
+    let res;
+    try {
+      res = await client.generate({ prompt: stripSubject({ character, action, count, hasSheet: Boolean(sheet), note, part: multi ? part : null }), parts: rowParts, references: refs, labels: refLabels, aspectRatio: stripAspect(count), size: config.size, op: multi ? `${action.name}#part${part.index + 1}.strip${a}` : `${action.name}#strip${a}` });
+    } catch (err) {
+      if (err.code !== "BUDGET") throw err;
+      record.stopped = err.message;
+      log(`    ${action.name}: stopped, ${err.message}\n`);
+      break;
+    }
+    const attempt = { index: a, ...(multi ? { part: part.index + 1, frames: [part.from + 1, part.to + 1] } : {}), costUSD: res.costUSD, blocked: res.blocked, note: note || null };
+    record.attempts.push(attempt);
+    if (res.blocked || !res.images.length) {
+      log(`    ${name} strip ${a}: not painted (${res.blocked})\n`);
+      continue;
+    }
+    const painted = res.images[0];
+    const stem = multi ? `part${part.index + 1}.strip${a}` : `strip${a}`;
+    attempt.source = path.join(adir, `${stem}.source.${painted.mimeType === "image/png" ? "png" : "jpg"}`);
+    await writeFile(attempt.source, painted.buffer);
+    const keyed = keyOut(decodeImage(painted.buffer), key, config.key);
+    attempt.keyed = path.join(adir, `${stem}.png`);
+    await writeFile(attempt.keyed, encodePNG(keyed.image));
+    attempt.keying = keyed.facts;
+    const slice = sliceStrip(keyed.image, count);
+    const frames = slice.cells.map((c) => c.image);
+    const measured = measureAction(frames, { reference, thresholds, loop: multi ? false : action.loop });
+    let joinBroken = false;
+    if (previous && alphaBounds(frames[0])) {
+      const [x, y] = normalisePair(frames[0], previous);
+      attempt.join = round(iou(silhouette(x), silhouette(y)));
+      joinBroken = attempt.join < thresholds.jump;
+    }
+    attempt.slicing = { found: slice.found, method: slice.method };
+    attempt.flagged = measured.flagged;
+    attempt.jumps = measured.jumps;
+    attempt.meanIoU = measured.meanIoU;
+    attempt.score = round(attemptScore(slice, measured) + (joinBroken ? 3 : 0));
+    log(`    ${name} strip ${a}: ${slice.found}/${count} poses (${slice.method}), flagged ${JSON.stringify(measured.flagged.map((i) => i + part.from + 1))}, jumps ${JSON.stringify(measured.jumps.map((i) => i + part.from + 1))}${attempt.join !== undefined ? `, join ${attempt.join}` : ""}${measured.meanIoU !== null ? `, shape ${measured.meanIoU}` : ""}, $${(res.costUSD ?? 0).toFixed(3)}\n`);
+    if (!best || attempt.score < best.attempt.score) best = { attempt, frames, measured };
+    if (slice.method === "gaps" && !measured.flagged.length && !measured.jumps.length && !joinBroken) break;
+    note = [retryNote(slice, measured, count, multi ? part.from : 0), joinBroken ? "its first frame does not follow on from the frame shown just before this strip." : ""].filter(Boolean).join(" ");
+  }
+  return best;
+}
+
 /** Paints, measures and repairs one action; returns its frames (trimmed, unplaced) and the record. */
 async function runAction({ action, character, client, rowParts, singleParts, references, labels, key, config, reference, sheet, dir, log }) {
   const sp = config.sprite;
@@ -285,51 +372,35 @@ async function runAction({ action, character, client, rowParts, singleParts, ref
   const adir = path.join(dir, slug(action.name));
   await mkdir(adir, { recursive: true });
   const record = { name: action.name, frames: count, fps: action.fps, facing: action.facing, loop: action.loop, mirror: action.mirror, motion: action.motion, attempts: [], fixes: [], dir: adir };
-  let best = null;
-  let note = "";
-  for (let a = 1; a <= 1 + sp.retries; a++) {
-    let res;
-    try {
-      res = await client.generate({ prompt: stripSubject({ character, action, count, hasSheet: Boolean(sheet), note }), parts: rowParts, references, labels, aspectRatio: stripAspect(count), size: config.size, op: `${action.name}#strip${a}` });
-    } catch (err) {
-      if (err.code !== "BUDGET") throw err;
-      record.stopped = err.message;
-      log(`    ${action.name}: stopped, ${err.message}\n`);
-      break;
+  const parts = stripParts(count, sp.stripFrames);
+  record.parts = parts.length;
+  const partFrames = [];
+  const chosen = [];
+  for (const [index, part] of parts.entries()) {
+    const ctx = { index, of: parts.length, from: part.from, to: part.to, total: count };
+    const painted = await paintPart({ action, part: ctx, character, client, rowParts, references, labels, key, config, reference, thresholds, sheet, adir, record, log, previous: index > 0 ? partFrames[index - 1].at(-1) : null, first: index > 0 && index === parts.length - 1 && action.loop ? partFrames[0][0] : null });
+    if (!painted) {
+      record.error = record.stopped ? "stopped by the budget before every strip was painted" : `no strip was painted${parts.length > 1 ? ` for frames ${part.from + 1} to ${part.to + 1}` : ""}`;
+      return { record, frames: null };
     }
-    const attempt = { index: a, costUSD: res.costUSD, blocked: res.blocked, note: note || null };
-    record.attempts.push(attempt);
-    if (res.blocked || !res.images.length) {
-      log(`    ${action.name} strip ${a}: not painted (${res.blocked})\n`);
-      continue;
-    }
-    const painted = res.images[0];
-    attempt.source = path.join(adir, `strip${a}.source.${painted.mimeType === "image/png" ? "png" : "jpg"}`);
-    await writeFile(attempt.source, painted.buffer);
-    const keyed = keyOut(decodeImage(painted.buffer), key, config.key);
-    attempt.keyed = path.join(adir, `strip${a}.png`);
-    await writeFile(attempt.keyed, encodePNG(keyed.image));
-    attempt.keying = keyed.facts;
-    const slice = sliceStrip(keyed.image, count);
-    const frames = slice.cells.map((c) => c.image);
-    const measured = measureAction(frames, { reference, thresholds, loop: action.loop });
-    attempt.slicing = { found: slice.found, method: slice.method };
-    attempt.flagged = measured.flagged;
-    attempt.jumps = measured.jumps;
-    attempt.meanIoU = measured.meanIoU;
-    attempt.score = round(attemptScore(slice, measured));
-    log(`    ${action.name} strip ${a}: ${slice.found}/${count} poses (${slice.method}), flagged ${JSON.stringify(measured.flagged.map((i) => i + 1))}, jumps ${JSON.stringify(measured.jumps.map((i) => i + 1))}${measured.meanIoU !== null ? `, shape ${measured.meanIoU}` : ""}, $${(res.costUSD ?? 0).toFixed(3)}\n`);
-    if (!best || attempt.score < best.attempt.score) best = { attempt, frames, measured };
-    if (slice.method === "gaps" && !measured.flagged.length && !measured.jumps.length) break;
-    note = retryNote(slice, measured, count);
+    painted.attempt.used = true;
+    chosen.push(painted.attempt.index);
+    partFrames.push(painted.frames);
   }
-  if (!best) {
-    record.error = record.stopped ? "stopped by the budget before a strip was painted" : "no strip was painted";
-    return { record, frames: null };
-  }
-  record.best = best.attempt.index;
-  let frames = best.frames.slice();
-  let measured = best.measured;
+  record.best = parts.length === 1 ? chosen[0] : null;
+  if (parts.length > 1) record.bestParts = chosen;
+  // Each strip is painted at its own pixel scale; bring every one to the first's,
+  // by their median frames, before the action is measured as a whole.
+  const medianOf = (fs) => fs.map((f) => f.height).sort((a, b) => a - b)[Math.floor(fs.length / 2)] || 1;
+  const m0 = medianOf(partFrames[0]);
+  let frames = partFrames
+    .map((fs, i) => {
+      if (i === 0) return fs;
+      const s = m0 / medianOf(fs);
+      return Math.abs(s - 1) < 0.01 ? fs : fs.map((f) => resize(f, Math.max(1, Math.round(f.width * s)), Math.max(1, Math.round(f.height * s)), { filter: "auto" }));
+    })
+    .flat();
+  let measured = measureAction(frames, { reference, thresholds, loop: action.loop });
   // Frames still wrong are repainted alone, between their neighbours.
   for (const i of [...measured.flagged]) {
     if (record.stopped) break;
