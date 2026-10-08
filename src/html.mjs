@@ -45,7 +45,8 @@ table{width:100%;border-collapse:collapse;font-size:13px;margin:10px 0}th{text-a
 .score i{display:block;height:6px;border-radius:3px;background:linear-gradient(90deg,var(--acc) var(--v),var(--line) var(--v))}.score b{text-align:right;font-weight:500}
 .k{margin:8px 0 2px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut)}ul{margin:0;padding-left:18px;font-size:13px}
 .cost{color:var(--mut);font-size:12px;margin:10px 0 0}
-.judge{margin-top:8px;border-top:1px solid var(--line);padding-top:8px}`;
+.judge{margin-top:8px;border-top:1px solid var(--line);padding-top:8px}
+h2.edits{max-width:1200px;margin:28px auto 12px;font-size:18px}.meta{color:var(--mut);font-size:13px;font-weight:400}`;
 
 const THEME_SCRIPT = `<script>
 (function(){var b=document.querySelector("button.theme"),r=document.documentElement;function cur(){return r.getAttribute("data-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}function show(){b.textContent=cur()==="dark"?"Light":"Dark"}b.addEventListener("click",function(){r.setAttribute("data-theme",cur()==="dark"?"light":"dark");show()});show()})();
@@ -90,6 +91,24 @@ const CONTACT_CSS = `main{max-width:1200px;margin:0 auto;display:grid;grid-templ
 .views{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}.views img{width:100%;height:96px;object-fit:contain;display:block;border-radius:6px;border:1px solid var(--line)}
 .outs{display:flex;flex-wrap:wrap;gap:10px;margin:10px 0}.out img{max-width:128px;max-height:128px;border:1px solid var(--line);border-radius:6px}`;
 
+function editsSection(summary, dir) {
+  if (!summary.edits?.length) return "";
+  const rows = summary.edits
+    .map((e) => {
+      const j = e.judgement;
+      const facts = e.facts?.edit;
+      if (!e.files?.image) return `<section class="card off"><h2>${esc(e.id)} <span class="meta">from ${esc(e.parent)}</span></h2><p>${esc(e.change)}</p><p class="warn">Not painted: ${esc(e.blocked ?? "unknown")}</p></section>`;
+      return `<section class="card" id="e${esc(e.id)}"><h2>${esc(e.id)} <span class="meta">from ${esc(e.parent)}</span></h2>
+<p>${esc(e.change)}</p>
+<div class="pair"><figure><img class="checker" loading="lazy" src="${esc(relativeSrc(dir, e.parentImage))}" alt=""><figcaption>before (${esc(e.parent)})</figcaption></figure><figure><img class="checker" loading="lazy" src="${esc(relativeSrc(dir, e.files.image))}" alt=""><figcaption>after</figcaption></figure></div>
+${facts ? `<p class="cost">${Math.round(facts.changed * 100)}% of the pixels changed, silhouette kept ${facts.silhouette}</p>` : ""}
+${j && !j.error ? `<div class="judge">${scoreBar("change made", j.applied)}${scoreBar("rest kept", j.preserved)}<p class="cost">Verdict: <b class="${j.verdict === "keep" ? "okc" : "warn"}">${esc(j.verdict)}</b></p>${j.problems?.length ? `<ul>${j.problems.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}</div>` : j?.error ? `<p class="warn">The judge failed: ${esc(j.error)}</p>` : ""}
+<p class="cost">$${(e.estimatedCostUSD ?? e.costUSD ?? 0).toFixed(3)}</p></section>`;
+    })
+    .join("\n");
+  return `<h2 class="edits">Edits</h2><main>${rows}</main>`;
+}
+
 export function renderContactHTML(summary, dir) {
   const cards = summary.candidates
     .map((c) => {
@@ -123,7 +142,8 @@ ${j ? `<div class="judge">${scoreBar("on brief", j.on_brief)}${scoreBar("on mode
   const judge = summary.judgement;
   const body = `<header><h1>${esc(summary.name)}${summary.kind === "sheet" ? " model sheet" : ""}</h1><button class="theme" type="button">Dark</button><p class="lead">${esc(String(summary.subject).split("\n")[0])} · ${esc(summary.model)} at ${esc(summary.size)}${summary.key ? ` · keyed on ${esc(summary.key)}` : ""}${summary.estimatedCostUSD != null ? ` · $${summary.estimatedCostUSD.toFixed(3)}` : ""} · ${esc(summary.generatedAt)}</p></header>
 ${judge && !judge.error ? `<div class="verdict"><b>Pick: ${judge.pick ? `candidate ${judge.pick}` : "none"}.</b> ${esc(judge.reason)}${judge.edit ? `<p class="edit">Edit to try: ${esc(judge.edit)}</p>` : ""}</div>` : judge?.error ? `<div class="verdict warn">The judge failed: ${esc(judge.error)}</div>` : ""}
-<main>${cards}</main>`;
+<main>${cards}</main>
+${editsSection(summary, dir)}`;
   return page(`${summary.name}: candidates`, CONTACT_CSS, body);
 }
 

@@ -100,6 +100,30 @@ export function processCandidate(raw, { config, key, outputs: makeOutputs = true
   return { image, trimmed, facts, outputs };
 }
 
+/**
+ * Writes the sized outputs beside a candidate. In pixel mode each also gets a
+ * preview enlarged with hard pixels, and the first preview is what the judge sees,
+ * since the sprite, not the painting, is what ships.
+ */
+export async function writeOutputs(base, outputs, config) {
+  const written = [];
+  let judgeImage = null;
+  for (const out of outputs) {
+    const file = `${base}.${out.width}x${out.height}.png`;
+    await writeFile(file, encodePNG(out.image));
+    const entry = { width: out.width, height: out.height, file };
+    if (config.pixel) {
+      const scale = Math.max(1, Math.floor(256 / Math.max(out.width, out.height)));
+      const preview = resize(out.image, out.width * scale, out.height * scale, { filter: "nearest" });
+      entry.preview = `${base}.${out.width}x${out.height}.preview.png`;
+      await writeFile(entry.preview, encodePNG(preview));
+      if (!judgeImage) judgeImage = preview;
+    }
+    written.push(entry);
+  }
+  return { outputs: written, judgeImage };
+}
+
 /** A one-line account of a candidate for the progress log. */
 export function describeFacts(facts) {
   const bits = [];
@@ -181,22 +205,9 @@ export async function generate({
     candidate.facts = processed.facts;
     candidate.files.image = `${base}.png`;
     await writeFile(candidate.files.image, encodePNG(processed.image));
-    candidate.files.outputs = [];
-    for (const out of processed.outputs) {
-      const file = `${base}.${out.width}x${out.height}.png`;
-      await writeFile(file, encodePNG(out.image));
-      candidate.files.outputs.push({ width: out.width, height: out.height, file });
-      if (config.pixel) {
-        // A preview a person can see: the sprite enlarged with hard pixels. It is
-        // also what the judge sees, since the sprite, not the painting, is what ships.
-        const scale = Math.max(1, Math.floor(256 / Math.max(out.width, out.height)));
-        const preview = resize(out.image, out.width * scale, out.height * scale, { filter: "nearest" });
-        const previewFile = `${base}.${out.width}x${out.height}.preview.png`;
-        await writeFile(previewFile, encodePNG(preview));
-        candidate.files.outputs[candidate.files.outputs.length - 1].preview = previewFile;
-        if (!candidate.judgeImage) candidate.judgeImage = preview;
-      }
-    }
+    const written = await writeOutputs(base, processed.outputs, config);
+    candidate.files.outputs = written.outputs;
+    if (written.judgeImage) candidate.judgeImage = written.judgeImage;
     candidate.turns = result.turns;
     log(`  ${i}/${n}: ${describeFacts(processed.facts)}, $${(result.costUSD ?? 0).toFixed(3)}\n`);
     candidates.push(candidate);

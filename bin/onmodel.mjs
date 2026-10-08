@@ -7,6 +7,7 @@ import { listModels } from "../src/gemini.mjs";
 import { resolveImagePrice, resolveTextPrice, PRICING_AS_OF } from "../src/pricing.mjs";
 import { generate } from "../src/generate.mjs";
 import { makeSheet, makeSprites } from "../src/sprites.mjs";
+import { editCandidate } from "../src/edit.mjs";
 
 const HELP = `onmodel: images, sprites and sets kept on model
 
@@ -20,6 +21,8 @@ Commands
            [--name slug] [--count 3] [--sizes 64,128] [--pixel 32[:16]] [--quantize]
            [--references a.png,b.png] [--palette #hex,#hex] [--background auto|#hex|none]
            [--size 1K] [--aspect 1:1] [--model id] [--judge id] [--no-judge] [--budget 2]
+  edit --name x --change "..."      continue a candidate's conversation with one change, then measure and
+           [--candidate 2|2e1] [--in dir] [--no-judge]    judge it: was the change made, was the rest kept
   sheet --subject "..." --name x    the model sheet: front, side and back views every frame is held to
            [--count 3] [--no-judge]
   sprites --name x                  paint each action as a strip, measure it against the sheet, repair
@@ -62,6 +65,9 @@ const OPTIONS = {
   actions: { type: "string" },
   "no-sheet": { type: "boolean" },
   pick: { type: "string" },
+  candidate: { type: "string" },
+  change: { type: "string" },
+  in: { type: "string" },
   json: { type: "boolean" },
   filter: { type: "string" },
   help: { type: "boolean", short: "h" },
@@ -115,6 +121,19 @@ async function main() {
         `cost ${money(result.estimatedCostUSD)}; open ${result.htmlPath}`,
       ].filter(Boolean);
       emit(config, lines.join("\n"), { command: "generate", ...result });
+      return;
+    }
+    case "edit": {
+      const config = await loadConfig(flags);
+      const result = await editCandidate({ config, name: flags.name, dir: flags.in ?? null, candidate: flags.candidate ?? null, change: flags.change, judge: !flags["no-judge"] });
+      const lines = [
+        result.files.image ? `${result.id} from ${result.parent}: ${result.files.image}` : `${result.id} from ${result.parent}: not painted (${result.blocked})`,
+        result.facts?.edit ? `changed ${Math.round(result.facts.edit.changed * 100)}% of the pixels, silhouette kept ${result.facts.edit.silhouette}` : null,
+        result.judgement && !result.judgement.error ? `judge: ${result.judgement.verdict}, change made ${result.judgement.applied}, rest kept ${result.judgement.preserved}${result.judgement.problems?.length ? `; ${result.judgement.problems.join("; ")}` : ""}` : null,
+        `cost ${money(result.estimatedCostUSD)}; open ${result.htmlPath}`,
+        result.files.image ? `edit it again with --candidate ${result.id}` : null,
+      ].filter(Boolean);
+      emit(config, lines.join("\n"), { command: "edit", ...result });
       return;
     }
     case "sheet": {
