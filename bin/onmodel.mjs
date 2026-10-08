@@ -8,6 +8,7 @@ import { resolveImagePrice, resolveTextPrice, PRICING_AS_OF } from "../src/prici
 import { generate } from "../src/generate.mjs";
 import { makeSheet, makeSprites } from "../src/sprites.mjs";
 import { editCandidate } from "../src/edit.mjs";
+import { makeIcons } from "../src/icons.mjs";
 
 const HELP = `onmodel: images, sprites and sets kept on model
 
@@ -23,6 +24,8 @@ Commands
            [--size 1K] [--aspect 1:1] [--model id] [--judge id] [--no-judge] [--budget 2]
   edit --name x --change "..."      continue a candidate's conversation with one change, then measure and
            [--candidate 2|2e1] [--in dir] [--no-judge]    judge it: was the change made, was the rest kept
+  icons --name x [--candidate 2]    every icon Android, iOS, the web and Expo ask for, from one mark, checked
+        or --mark logo.png          against a dated rulebook, with mask previews  [--background #hex] (free)
   sheet --subject "..." --name x    the model sheet: front, side and back views every frame is held to
            [--count 3] [--no-judge]
   sprites --name x                  paint each action as a strip, measure it against the sheet, repair
@@ -66,6 +69,7 @@ const OPTIONS = {
   "no-sheet": { type: "boolean" },
   pick: { type: "string" },
   candidate: { type: "string" },
+  mark: { type: "string" },
   change: { type: "string" },
   in: { type: "string" },
   json: { type: "boolean" },
@@ -121,6 +125,20 @@ async function main() {
         `cost ${money(result.estimatedCostUSD)}; open ${result.htmlPath}`,
       ].filter(Boolean);
       emit(config, lines.join("\n"), { command: "generate", ...result });
+      return;
+    }
+    case "icons": {
+      const config = await loadConfig({ ...flags, background: undefined });
+      const result = await makeIcons({ config, name: flags.name ?? null, candidate: flags.candidate ?? null, markPath: flags.mark ?? null, background: flags.background ?? null });
+      const counts = Object.entries(result.files.reduce((m, f) => ({ ...m, [f.platform]: (m[f.platform] ?? 0) + 1 }), {})).map(([p, n]) => `${p} ${n}`);
+      const lines = [
+        `${result.name} icons in ${result.dir}: ${counts.join(", ")} files, on ${result.background.hex}`,
+        result.failures.length ? `${result.failures.length} checks failed:\n${result.failures.map((f) => `  ${f.file}: ${f.check}, ${f.detail}`).join("\n")}` : `every file passes its platform's rules (as of ${result.rulesAsOf})`,
+        result.warnings.length ? `${result.warnings.length} warning${result.warnings.length === 1 ? "" : "s"}:\n${result.warnings.map((w) => `  ${w.file}: ${w.check}, ${w.detail}`).join("\n")}` : null,
+        `open ${result.htmlPath}`,
+      ];
+      emit(config, lines.join("\n"), { command: "icons", ...result });
+      if (result.failures.length) process.exitCode = 2;
       return;
     }
     case "edit": {

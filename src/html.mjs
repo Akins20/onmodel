@@ -147,7 +147,49 @@ ${editsSection(summary, dir)}`;
   return page(`${summary.name}: candidates`, CONTACT_CSS, body);
 }
 
-const SPRITES_CSS = `section.block{max-width:1200px;margin:0 auto 18px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+const ICONS_CSS = `section.block{max-width:1200px;margin:0 auto 18px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.previews{display:flex;flex-wrap:wrap;gap:16px}.previews figure{width:140px}.previews img{width:128px;height:128px;object-fit:contain;display:block}
+.swatch{display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid var(--line);vertical-align:-2px;margin-right:6px}
+td.f{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}td.ok{color:var(--ok)}td.no{color:var(--warn)}td.wn{color:#9a6a00}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;margin:6px 0 14px}
+.meta{color:var(--mut);font-size:13px}`;
+
+export function renderIconsHTML(summary, dir) {
+  const platforms = { android: "Android", ios: "iOS", web: "Web", expo: "Expo" };
+  const previews = summary.previews.map((p) => `<figure><img class="checker" src="${esc(relativeSrc(dir, p.path))}" alt="" style="${summary.pixel ? "image-rendering:pixelated" : ""}"><figcaption>${esc(p.caption)}</figcaption></figure>`).join("");
+  const blocks = Object.entries(platforms)
+    .map(([key, title]) => {
+      const files = summary.files.filter((f) => f.platform === key);
+      const rows = files
+        .filter((f) => !f.text)
+        .map((f) => {
+          const failed = f.checks.filter((c) => !c.ok && !c.warn);
+          const warned = f.checks.filter((c) => !c.ok && c.warn);
+          const status = !f.checks.length
+            ? ""
+            : failed.length
+              ? `<td class="no">${esc(failed.map((c) => `${c.check}: ${c.detail}`).join("; "))}</td>`
+              : warned.length
+                ? `<td class="wn">${esc(warned.map((c) => `${c.check}: ${c.detail}`).join("; "))}</td>`
+                : `<td class="ok">${esc(f.checks.map((c) => c.check).join(", "))}</td>`;
+          return `<tr><td class="f">${esc(f.rel)}</td><td>${f.width ? `${f.width}x${f.height}` : ""}</td><td>${Math.max(1, Math.round(f.bytes / 1024))} KB</td>${status || "<td></td>"}</tr>${f.note ? `<tr><td colspan="4" class="meta">${esc(f.note)}</td></tr>` : ""}`;
+        })
+        .join("");
+      const snippets = files.filter((f) => f.text).map((f) => `<p class="meta">${esc(f.rel)}${f.note ? `: ${esc(f.note)}` : ""}</p><pre>${esc(f.text)}</pre>`).join("");
+      return `<section class="block"><h2>${title}</h2><table><thead><tr><th>File</th><th>Size</th><th>Bytes</th><th>Checks</th></tr></thead><tbody>${rows}</tbody></table>${snippets}</section>`;
+    })
+    .join("\n");
+  const warnLine = summary.warnings?.length ? ` ${summary.warnings.length} warning${summary.warnings.length === 1 ? "" : "s"}: ${esc(summary.warnings.map((w) => `${w.file} (${w.check})`).join(", "))}.` : "";
+  const failures = summary.failures.length ? `<div class="verdict warn">${summary.failures.length} check${summary.failures.length === 1 ? "" : "s"} failed: ${esc(summary.failures.map((f) => `${f.file} (${f.check})`).join(", "))}.${warnLine}</div>` : `<div class="verdict"><b>Every file passes its platform's rules</b> as read on ${esc(summary.rulesAsOf)}.${warnLine}</div>`;
+  const body = `<header><h1>${esc(summary.name)} icons</h1><button class="theme" type="button">Dark</button><p class="lead">From ${esc(path.basename(summary.mark))} (${summary.markSize.width}x${summary.markSize.height}${summary.pixel ? ", pixel art kept hard" : ""}) · <span class="swatch" style="background:${esc(summary.background.hex)}"></span>${esc(summary.background.hex)}, contrast ${summary.background.contrast} with the mark, ${esc(summary.background.reason)} · ${esc(summary.generatedAt)}</p></header>
+${failures}
+<section class="block"><h2>How it will look</h2><div class="previews">${previews}</div></section>
+${blocks}
+<section class="block"><p class="meta">Rules read on ${esc(summary.rulesAsOf)} from ${Object.values(summary.sources).map((u) => `<a href="${esc(u)}">${esc(new URL(u).hostname)}</a>`).join(", ")}.</p></section>`;
+  return page(`${summary.name}: icons`, ICONS_CSS, body);
+}
+
+const SPRITES_CSS =`section.block{max-width:1200px;margin:0 auto 18px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
 .row{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start}
 .sheetv img{height:120px;border:1px solid var(--line);border-radius:6px}
 .atlas img{max-width:100%;border:1px solid var(--line);border-radius:6px;image-rendering:pixelated}
