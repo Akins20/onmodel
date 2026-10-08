@@ -232,6 +232,24 @@ export function encodePNG24({ width, height, data }) {
   return Buffer.concat([SIGNATURE, chunk("IHDR", ihdrFor24(width, height)), chunk("IDAT", deflateSync(filtered, { level: 9 })), chunk("IEND", Buffer.alloc(0))]);
 }
 
+/**
+ * Whether a file carries an alpha channel at all, whatever its pixels say: a PNG of
+ * colour type 4 or 6, or any PNG with a tRNS chunk. The stores that forbid alpha
+ * reject the channel itself, so a fully opaque RGBA file fails them. JPEG has none.
+ */
+export function hasAlphaChannel(buffer) {
+  if (!isPNG(buffer)) return false;
+  if (buffer[25] === 4 || buffer[25] === 6) return true;
+  for (let p = 8; p + 8 <= buffer.length; ) {
+    const length = buffer.readUInt32BE(p);
+    const type = buffer.toString("latin1", p + 4, p + 8);
+    if (type === "tRNS") return true;
+    if (type === "IDAT" || type === "IEND") return false;
+    p += 12 + length;
+  }
+  return false;
+}
+
 export function encodePNG(image) {
   return Buffer.concat([SIGNATURE, chunk("IHDR", ihdrFor(image.width, image.height)), chunk("IDAT", deflateSync(filterRows(image), { level: 6 })), chunk("IEND", Buffer.alloc(0))]);
 }

@@ -47,16 +47,26 @@ test("a store plan prices the heroes and lists the crops as free", () => {
   assert.ok(p.best > 0);
 });
 
-test("a sprite plan is a best-to-worst range driven by strips and retries", () => {
-  const c = cfg({ sprite: { stripFrames: 8, retries: 2 } });
+test("a sprite plan is a best-to-worst range: strips, retries, frame repaints and judged repairs", () => {
+  const c = cfg({ sprite: { stripFrames: 8, retries: 2, frameRetries: 1, judgeRepairs: 1 } });
   const p = estimatePlan(c, { sprites: [{ name: "walk", frames: 6 }, { name: "run", frames: 10 }], count: 2, size: "1K" });
   const it = p.items[0];
-  // walk: 1 strip, run: ceil(10/8)=2 strips => 3 strips; sheet = 2 candidates
+  // walk: 1 strip, run: ceil(10/8)=2 strips => 3 strips; sheet = 2 candidates; 16 frames
   assert.equal(it.images, 2 + 3, "best: sheet + one pass of each strip");
-  assert.equal(it.imagesWorst, 2 + 3 * (1 + 2), "worst: every strip painted 1+retries times");
+  assert.equal(it.imagesWorst, 2 + 3 * (1 + 2) + 16 * 1 + 16 * 1, "worst: strips 1+retries times, every frame repainted, every frame in a judged repair");
+  assert.equal(it.judgeCalls, 1 + 2, "best: a sheet judge plus one per action");
+  assert.equal(it.judgeCallsWorst, 1 + 2 * (1 + 1), "worst: plus the second judgement of each repair pass");
   assert.ok(it.worst > it.best, "the range is real");
-  assert.equal(it.judgeCalls, 1 + 2, "a sheet judge plus one per action");
-  assert.ok(p.assumptions.some((a) => /retries/.test(a)));
+  assert.ok(p.assumptions.some((a) => /repainted/.test(a)));
+});
+
+test("a plan that is not the workload asked for is refused, not priced as another", () => {
+  const c = cfg();
+  assert.throws(() => estimatePlan(c, { subjects: NaN }), /--subjects must be a whole number/);
+  assert.throws(() => estimatePlan(c, { subjects: 1, count: 0 }), /--count/);
+  assert.throws(() => estimatePlan(c, { sprites: [{ name: "walk", frames: NaN }] }), /walk needs a frame count/);
+  assert.throws(() => estimatePlan(c, { sprites: [{ name: "long", frames: c.sprite.maxFrames + 1 }] }), /from 1 to/);
+  assert.doesNotThrow(() => estimatePlan(c, { subjects: 0, store: true }), "zero subjects beside a store run is a real plan");
 });
 
 test("combining generate, store and sprites sums into one total", () => {
@@ -76,7 +86,15 @@ test("no plan flags gives a default single-run estimate", () => {
 test("an unknown model is reported as having no price, not given an invented one", () => {
   const p = estimatePlan(cfg({ model: "no-such-image-model" }), { subjects: 2, count: 3, judge: false });
   assert.equal(p.priceKnown, false);
-  assert.equal(p.best, 0, "an unknown image model yields no invented image cost");
+  assert.equal(p.best, null, "no number at all, not $0");
+  assert.equal(p.items[0].best, null);
+  assert.ok(p.missing.some((m) => /no-such-image-model/.test(m)));
+});
+
+test("a size the model has no per-image price for is unpriced, with the reason", () => {
+  const p = estimatePlan(cfg(), { subjects: 8, size: "512px" });
+  assert.equal(p.best, null, "the judge alone is not passed off as the cost of 24 images");
+  assert.ok(p.missing.some((m) => /512px/.test(m)));
 });
 
 test("references are flagged as adding uncounted input cost", () => {

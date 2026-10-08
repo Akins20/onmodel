@@ -168,7 +168,7 @@ async function main() {
       });
       const lines = [
         `${result.name} store graphics in ${result.dir}: ${result.targets.join(", ")}${result.pick ? `, pick candidate ${result.pick}` : ""}`,
-        result.failures.length ? `${result.failures.length} checks failed:\n${result.failures.map((f) => `  #${f.candidate} ${f.target}: ${f.check}, ${f.detail}`).join("\n")}` : `every graphic meets its target's size and format (as of ${result.rulesAsOf})`,
+        result.failures.length ? `${result.failures.length} checks failed:\n${result.failures.map((f) => `  ${f.candidate ? `#${f.candidate} ` : ""}${f.target}: ${f.check}, ${f.detail}`).join("\n")}` : `every graphic meets its target's size and format (as of ${result.rulesAsOf})`,
         `cost ${money(result.estimatedCostUSD)}; open ${result.htmlPath}`,
       ];
       emit(config, lines.join("\n"), { command: "store", ...result });
@@ -219,12 +219,15 @@ async function main() {
     case "check": {
       const config = await loadConfig(flags);
       const dirs = flags.in ? [flags.in] : flags.name ? [path.join(config.out, slug(flags.name))] : await findRuns(config.out);
-      if (!dirs.length) {
-        emit(config, `no runs to check under ${config.out}`, { command: "check", runs: [], failures: [] });
-        return;
-      }
       const runs = [];
       for (const dir of dirs) runs.push(...(await checkRun({ dir })));
+      // A gate that checked nothing has not passed: a mistyped name, a wrong --out or a
+      // folder with no summary must fail the build, not wave it through.
+      if (!runs.length) {
+        emit(config, `nothing to check: no onmodel summary found in ${dirs.length ? dirs.join(", ") : config.out}`, { command: "check", runs: [], failures: [], checked: 0 });
+        process.exitCode = 2;
+        return;
+      }
       const failures = failuresOf(runs);
       const lines = runs.map((r) => {
         const fails = r.files.flatMap((f) => f.checks.filter((c) => !c.ok && !c.warn).map((c) => `${f.rel} (${c.check}: ${c.detail})`));
@@ -249,12 +252,13 @@ async function main() {
       const lines = [`estimate on ${plan.model}${plan.judge ? ` + ${plan.judge}` : ""} at ${plan.size}:`];
       for (const it of plan.items) {
         const range = it.worst != null && it.worst !== it.best ? `${fmt(it.best)} to ${fmt(it.worst)}` : fmt(it.best);
-        lines.push(`  ${it.label}: ${it.detail}`, `    ${it.images}${it.imagesWorst ? ` to ${it.imagesWorst}` : ""} images${it.judgeCalls ? ` + ${it.judgeCalls} judge call${it.judgeCalls === 1 ? "" : "s"}` : ""} = ${range}`);
+        const calls = it.judgeCallsWorst && it.judgeCallsWorst !== it.judgeCalls ? `${it.judgeCalls} to ${it.judgeCallsWorst}` : `${it.judgeCalls}`;
+        lines.push(`  ${it.label}: ${it.detail}`, `    ${it.images}${it.imagesWorst ? ` to ${it.imagesWorst}` : ""} images${it.judgeCalls ? ` + ${calls} judge calls` : ""} = ${range}`);
       }
-      lines.push(plan.best === plan.worst ? `total about ${fmt(plan.best)}` : `total ${fmt(plan.best)} to ${fmt(plan.worst)}`);
+      lines.push(plan.best == null ? "total: no price" : plan.best === plan.worst ? `total about ${fmt(plan.best)}` : `total ${fmt(plan.best)} to ${fmt(plan.worst)}`);
+      for (const m of plan.missing) lines.push(`no price: ${m}`);
       lines.push(`free (no API): ${plan.free.join(", ")}`);
       for (const a of plan.assumptions) lines.push(`note: ${a}`);
-      if (!plan.priceKnown) lines.push(`(no built-in price for this model; set the config's "pricing" block)`);
       emit(config, lines.join("\n"), { command: "price", ...plan });
       return;
     }

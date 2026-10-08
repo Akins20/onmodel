@@ -137,6 +137,11 @@ test("one mark becomes every platform's icons, all passing their rules, with the
   assert.deepEqual(icoInfo(await readFile(file("web/favicon.ico"))).map((e) => e.width), [16, 32, 48]);
   const ios = decodePNG(await readFile(file("ios/AppIcon.appiconset/AppIcon.png")));
   assert.ok(Array.from({ length: 1024 * 1024 }, (_, i) => ios.data[i * 4 + 3]).every((a) => a === 255), "the App Store icon has no transparency");
+  // App Store Connect rejects the alpha channel itself, so opaque icons are 24-bit.
+  for (const rel of ["ios/AppIcon.appiconset/AppIcon.png", "web/apple-touch-icon.png", "expo/icon.png"]) assert.equal((await readFile(file(rel)))[25], 2, `${rel} is a 24-bit PNG with no alpha channel`);
+  const appIcon = result.files.find((f) => f.rel === "ios/AppIcon.appiconset/AppIcon.png");
+  assert.ok(appIcon.checks.some((c) => c.check === "no alpha channel" && c.ok), "the alpha-channel check runs and passes");
+  assert.deepEqual(appIcon.rule, { width: 1024, height: 1024, opaque: true }, "the rule is recorded for check to re-apply");
   const contents = JSON.parse(await readFile(file("ios/AppIcon.appiconset/Contents.json"), "utf8"));
   assert.deepEqual(contents.images.map((i) => i.appearances?.[0]?.value ?? "default"), ["default", "dark", "tinted"]);
   assert.match(await readFile(file("android/res/mipmap-anydpi-v26/ic_launcher.xml"), "utf8"), /<monochrome android:drawable="@mipmap\/ic_launcher_monochrome" \/>/);

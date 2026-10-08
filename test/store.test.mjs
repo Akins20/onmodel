@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, readFile, access } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, access, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { makeStore, storeSubject } from "../src/store.mjs";
+import { makeStore, storeSubject, encodeForTarget } from "../src/store.mjs";
+import { decodeJPEG, isJPEG } from "../src/jpeg.mjs";
 import { DEFAULTS, merge, validate } from "../src/config.mjs";
 import { decodePNG } from "../src/png.mjs";
 import { STORE_TARGETS } from "../src/rules.mjs";
@@ -116,9 +117,11 @@ test("a hero is painted and judged, then cropped to every target as a no-alpha 2
   assert.equal(c1.files.targets.length, 3);
   assert.equal(c2.files.targets.length, 3);
 
+  // its own folder beside any run of the same name, as icons/ and sprites/ are
+  assert.equal(result.dir, path.join(config.out, "shop-promo", "store"));
   for (const key of Object.keys(STORE_TARGETS)) {
     const t = STORE_TARGETS[key];
-    const file = path.join(result.dir, "store", `01.${key}.png`);
+    const file = path.join(result.dir, `01.${key}.png`);
     await access(file);
     const buf = await readFile(file);
     assert.equal(buf[25], 2, `${key} is a 24-bit (colour type 2) PNG with no alpha channel`);
@@ -130,14 +133,15 @@ test("a hero is painted and judged, then cropped to every target as a no-alpha 2
     assert.equal(translucent, 0, `${key} is fully opaque`);
     assert.ok(buf.length <= t.maxBytes, `${key} is within its byte cap`);
   }
-  assert.ok(decodePNG(await readFile(path.join(result.dir, "store", "01.github.png"))), "github preview decodes");
-  assert.ok(readFile(path.join(result.dir, "store", "01.github.png")).then((b) => b.length <= 1024 * 1024));
+  assert.equal(c1.files.targets[0].rel, "01.play-feature.png", "each file's path is kept relative to the store folder");
 
   await access(path.join(result.dir, "store.json"));
   await access(path.join(result.dir, "store.html"));
   await access(path.join(result.dir, "contact.html"));
   const html = await readFile(path.join(result.dir, "store.html"), "utf8");
   assert.match(html, /store graphics/);
+  assert.equal(result.request, "a plum storefront at dusk", "the user's own subject is kept");
+  assert.match(html, /a plum storefront at dusk/, "and shown, not the banner wrapper");
   assert.match(html, /Every graphic meets its target|checks? failed/);
   assert.match(html, /prefers-color-scheme/);
   assert.ok(result.estimatedCostUSD > 0.08, `two heroes and a judge cost real money, got ${result.estimatedCostUSD}`);
@@ -151,7 +155,66 @@ test("a subset of targets can be chosen, and an unknown target is refused", asyn
   assert.deepEqual(result.targets, ["og"]);
   assert.equal(result.candidates[0].files.targets.length, 1);
   assert.equal(result.candidates[0].files.targets[0].key, "og");
-  await access(path.join(result.dir, "store", "01.og.png"));
+  await access(path.join(result.dir, "01.og.png"));
 
   await assert.rejects(() => withKey(() => makeStore({ config, name: "bad", targets: ["billboard"], fetch: fetchImpl, log: () => {} })), /unknown store target/);
+
+  const twice = await withKey(() => makeStore({ config, name: "dupes", targets: ["og", "OG", "github"], fetch: fetchImpl, log: () => {} }));
+  assert.deepEqual(twice.targets, ["og", "github"], "a repeated target is made once");
+  assert.equal(twice.candidates[0].files.targets.length, 2);
+});
+
+test("a store run leaves the generate run of the same name alone", async () => {
+  const jpeg = await readFile(path.join(fixtures, "cat-256.jpg"));
+  const { config } = await setup({ candidates: 1 });
+  const runDir = path.join(config.out, "app");
+  await mkdir(runDir, { recursive: true });
+  const sentinel = JSON.stringify({ kind: "generate", name: "app", note: "the mark" });
+  await writeFile(path.join(runDir, "generate.json"), sentinel);
+  await writeFile(path.join(runDir, "01.png"), "the mark's pixels");
+  const { fetchImpl } = fakeApi(jpeg.toString("base64"), { blockThird: false });
+  await withKey(() => makeStore({ config, name: "app", fetch: fetchImpl, log: () => {} }));
+  assert.equal(await readFile(path.join(runDir, "generate.json"), "utf8"), sentinel, "the mark run's summary is untouched");
+  assert.equal(await readFile(path.join(runDir, "01.png"), "utf8"), "the mark's pixels", "and so is its image");
+});
+
+test("a store run in which nothing was painted fails instead of reporting success", async () => {
+  const { config } = await setup({ candidates: 2 });
+  const blocked = async () => ({ ok: true, status: 200, json: async () => ({ promptFeedback: { blockReason: "SAFETY" }, usageMetadata: { promptTokenCount: 40, totalTokenCount: 40 } }) });
+  const result = await withKey(() => makeStore({ config, name: "nothing", fetch: blocked, log: () => {} }));
+  assert.equal(result.failures.length, 1);
+  assert.equal(result.failures[0].check, "painted");
+  assert.equal(result.failures[0].candidate, null);
+});
+
+test("a pixel-mode project's banner is not asked for on a sprite grid", async () => {
+  const jpeg = await readFile(path.join(fixtures, "cat-256.jpg"));
+  const { config } = await setup({ candidates: 1, pixel: { grid: 32, colors: 16 } });
+  assert.ok(config.pixel, "the project is in pixel mode");
+  const { calls, fetchImpl } = fakeApi(jpeg.toString("base64"), { blockThird: false });
+  await withKey(() => makeStore({ config, name: "pix", fetch: fetchImpl, log: () => {} }));
+  const rules = calls.find((c) => c.body?.generationConfig).body.contents[0].parts.find((p) => p.text?.startsWith("## Rules")).text;
+  assert.doesNotMatch(rules, /grid/, "no pixel-grid instruction for a 16:9 banner");
+});
+
+test("a target over its byte cap is written as the best JPEG that fits, when the target takes JPEG", () => {
+  // noise compresses badly as PNG
+  const w = 400;
+  const h = 200;
+  const data = new Uint8Array(w * h * 4);
+  let seed = 7;
+  for (let i = 0; i < w * h; i++) {
+    seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
+    data.set([seed & 255, (seed >> 8) & 255, (seed >> 16) & 255, 255], i * 4);
+  }
+  const image = { width: w, height: h, data };
+  const cap = 120 * 1024;
+  const out = encodeForTarget(image, { maxBytes: cap, jpeg: true });
+  assert.equal(out.ext, "jpg");
+  assert.ok(out.buffer.length <= cap, `fits the cap: ${out.buffer.length}`);
+  assert.ok(out.pngBytes > cap, "the PNG really was over");
+  assert.ok(isJPEG(out.buffer));
+  assert.equal(decodeJPEG(out.buffer).width, w);
+  assert.equal(encodeForTarget(image, { maxBytes: cap, jpeg: false }).ext, "png", "a target that takes only PNG keeps PNG");
+  assert.equal(encodeForTarget({ width: 8, height: 8, data: new Uint8Array(256).fill(255) }, { maxBytes: cap, jpeg: true }).ext, "png", "under the cap stays lossless");
 });

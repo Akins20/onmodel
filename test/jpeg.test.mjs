@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { decodeJPEG, isJPEG } from "../src/jpeg.mjs";
+import { decodeJPEG, isJPEG, encodeJPEG, JPEG_HUFFMAN } from "../src/jpeg.mjs";
 import { decodePNG, encodePNG } from "../src/png.mjs";
 
 /**
@@ -81,4 +81,43 @@ test("a baseline file with restart intervals decodes the same as one without", a
   const a = decodeJPEG(jpeg);
   const b = decodeJPEG(withDri);
   assert.deepEqual(Array.from(b.data.subarray(0, 4096)), Array.from(a.data.subarray(0, 4096)));
+});
+
+const psnr = (a, b) => {
+  let se = 0;
+  for (let i = 0; i < a.width * a.height; i++) for (let c = 0; c < 3; c++) se += (a.data[i * 4 + c] - b.data[i * 4 + c]) ** 2;
+  return 10 * Math.log10((255 * 255) / (se / (a.width * a.height * 3)));
+};
+
+test("the encoder's Huffman tables hold every baseline symbol exactly once", () => {
+  const want = new Set([0x00, 0xf0]);
+  for (let r = 0; r < 16; r++) for (let s = 1; s <= 10; s++) want.add((r << 4) | s);
+  for (const k of ["acLuma", "acChroma"]) {
+    const { bits, values } = JPEG_HUFFMAN[k];
+    assert.equal(bits.reduce((t, b) => t + b, 0), values.length, `${k}: the counts match the symbols`);
+    assert.equal(new Set(values).size, 162, `${k}: 162 distinct symbols`);
+    assert.ok([...want].every((s) => values.includes(s)), `${k}: every run/size pair, EOB and ZRL`);
+  }
+  for (const k of ["dcLuma", "dcChroma"]) assert.equal(JPEG_HUFFMAN[k].bits.reduce((t, b) => t + b, 0), 12);
+});
+
+test("an encoded image decodes back at its size, close to the source, and smaller as quality drops", async () => {
+  // odd dimensions, so the edge blocks are partial
+  const w = 203;
+  const h = 117;
+  const data = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) data.set([(x * 255 / w) | 0, (y * 255 / h) | 0, ((x + y) * 3) % 256, 255], (y * w + x) * 4);
+  const src = { width: w, height: h, data };
+  const hi = encodeJPEG(src, { quality: 92 });
+  const lo = encodeJPEG(src, { quality: 70 });
+  assert.ok(isJPEG(hi));
+  const back = decodeJPEG(hi);
+  assert.equal(back.width, w);
+  assert.equal(back.height, h);
+  assert.ok(psnr(src, back) > 38, `quality 92 stays close, got ${psnr(src, back).toFixed(1)} dB`);
+  assert.ok(lo.length < hi.length, "a lower quality is a smaller file");
+
+  // a real photo through the encoder and back
+  const cat = decodeJPEG(await readFile(path.join(fixtures, "cat-256.jpg")));
+  assert.ok(psnr(cat, decodeJPEG(encodeJPEG(cat, { quality: 90 }))) > 33, "a photo survives a re-encode");
 });

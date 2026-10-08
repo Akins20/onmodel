@@ -20,6 +20,8 @@
  *   Android notification icons: 24 dp, white on transparent; the system tints them.
  */
 
+import { hasAlphaChannel } from "./png.mjs";
+
 export const RULES_AS_OF = "2026-10-08";
 
 export const RULE_SOURCES = {
@@ -54,9 +56,9 @@ export const PLAY_MAX_BYTES = 1024 * 1024;
  *   GitHub repository social preview: 1280 x 640 recommended, PNG or JPG, under 1 MB.
  */
 export const STORE_TARGETS = {
-  "play-feature": { width: 1024, height: 500, opaque: true, maxBytes: 15 * 1024 * 1024, label: "Google Play feature graphic", channel: "play", source: "play" },
-  og: { width: 1200, height: 630, opaque: true, maxBytes: 8 * 1024 * 1024, label: "Open Graph link preview (also serves X)", channel: "web", source: "opengraph" },
-  github: { width: 1280, height: 640, opaque: true, maxBytes: 1024 * 1024, label: "GitHub social preview", channel: "web", source: "github" },
+  "play-feature": { width: 1024, height: 500, opaque: true, maxBytes: 15 * 1024 * 1024, jpeg: true, label: "Google Play feature graphic", channel: "play", source: "play" },
+  og: { width: 1200, height: 630, opaque: true, maxBytes: 8 * 1024 * 1024, jpeg: true, label: "Open Graph link preview (also serves X)", channel: "web", source: "opengraph" },
+  github: { width: 1280, height: 640, opaque: true, maxBytes: 1024 * 1024, jpeg: true, label: "GitHub social preview", channel: "web", source: "github" },
 };
 
 /**
@@ -64,7 +66,7 @@ export const STORE_TARGETS = {
  * RGBA, `bytes` the file's size, `rule` the entry's requirements. Returns a list
  * of { check, ok, detail } so the report can say exactly what failed.
  */
-export function checkIcon(image, bytes, rule) {
+export function checkIcon(image, bytes, rule, buffer = null) {
   const out = [];
   const push = (check, ok, detail, warn = false) => out.push({ check, ok, detail, ...(warn ? { warn: true } : {}) });
   if (rule.width) push("size", image.width === rule.width && image.height === rule.height, `${image.width}x${image.height}, needs ${rule.width}x${rule.height}`);
@@ -100,6 +102,7 @@ export function checkIcon(image, bytes, rule) {
     if (safeR !== null && !isBackground && Math.hypot(x + 0.5 - cx, y + 0.5 - cy) > safeR) outside++;
   }
   if (rule.opaque) push("opaque", translucent === 0, translucent ? `${translucent} pixels are not fully opaque; this platform shows them black or rejects the file` : "no transparency");
+  if (rule.opaque && buffer) push("no alpha channel", !hasAlphaChannel(buffer), hasAlphaChannel(buffer) ? "the file has an alpha channel; stores that forbid alpha reject the channel even when every pixel is opaque" : "24-bit, no alpha channel");
   if (rule.transparent) push("transparent background", translucent > 0, translucent ? "has transparency" : "fully opaque; the system needs a transparent background to draw it");
   if (rule.whiteOnly) push("white only", opaqueNonWhite === 0, opaqueNonWhite ? `${opaqueNonWhite} visible pixels are not white; the system tints a silhouette and colour is lost or shows as a block` : "a white silhouette");
   if (rule.singleColour) push("one colour", colours.size <= 1, `${colours.size} colours; a themed icon is one silhouette the system tints`);

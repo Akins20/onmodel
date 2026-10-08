@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { decodeImage, encodePNG } from "./image.mjs";
+import { encodePNG24 } from "./png.mjs";
 import { trim, resize, blit, alphaBounds, fillBackground } from "./key.mjs";
 import { parseColor, toHex } from "./color.mjs";
 import { contrastRatio } from "./pixels.mjs";
@@ -328,14 +329,16 @@ export async function makeIcons({ config, name = null, candidate = null, markPat
   for (const f of files) {
     const target = path.join(dir, f.rel);
     await mkdir(path.dirname(target), { recursive: true });
-    const buffer = f.image && !Buffer.isBuffer(f.image) ? encodePNG(f.image) : f.image;
+    // An opaque icon (the App Store's) is written without an alpha channel: App Store
+    // Connect rejects the channel itself, even when every pixel is opaque.
+    const buffer = f.image && !Buffer.isBuffer(f.image) ? (f.rule?.opaque ? encodePNG24(f.image) : encodePNG(f.image)) : f.image;
     await writeFile(target, buffer);
     const entry = { platform: f.platform, path: target, rel: f.rel, bytes: buffer.length, note: f.note ?? null, rule: f.rule ?? null, checks: [] };
     if (/\.(xml|json|html|webmanifest|txt)$/.test(f.rel)) entry.text = buffer.toString("utf8");
     if (f.image && !Buffer.isBuffer(f.image)) {
       entry.width = f.image.width;
       entry.height = f.image.height;
-      if (f.rule) entry.checks = checkIcon(f.image, buffer.length, f.rule);
+      if (f.rule) entry.checks = checkIcon(f.image, buffer.length, f.rule, buffer);
     } else if (f.rule?.ico) {
       const sizes = icoInfo(buffer).map((e) => e.width);
       entry.checks = [{ check: "sizes", ok: f.rule.ico.every((s) => sizes.includes(s)), detail: `holds ${sizes.join(", ")} px; needs ${f.rule.ico.join(", ")}` }];

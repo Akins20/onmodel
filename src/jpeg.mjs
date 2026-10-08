@@ -417,3 +417,209 @@ function assemble(frame, quant, adobeTransform) {
   }
   return { width, height, data: out };
 }
+
+/*
+ * A baseline JPEG encoder, the decoder's counterpart, for the store graphics that
+ * must fit a byte cap a lossless PNG can pass (GitHub's preview is under 1 MB). One
+ * sequential scan, 4:4:4 sampling so brand colours and edges keep their chroma, the
+ * Annex K quantisation tables scaled by quality the way libjpeg scales them, and the
+ * Annex K Huffman tables. The file has no alpha channel by construction.
+ */
+
+const STD_LUMA_Q = [
+  16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56, 14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104,
+  113, 92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99,
+];
+const STD_CHROMA_Q = [17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99, 24, 26, 56, 99, 99, 99, 99, 99, 47, 66, 99, 99, 99, 99, 99, 99, ...new Array(32).fill(99)];
+
+const DC_VALUES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+/** The Annex K Huffman tables: code counts per length 1 to 16, then the symbols in code order. */
+export const JPEG_HUFFMAN = {
+  dcLuma: { bits: [0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0], values: DC_VALUES },
+  dcChroma: { bits: [0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0], values: DC_VALUES },
+  acLuma: {
+    bits: [0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 0x7d],
+    values: [
+      0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07, 0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xa1, 0x08, 0x23, 0x42, 0xb1, 0xc1, 0x15, 0x52, 0xd1,
+      0xf0, 0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0a, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x43, 0x44, 0x45, 0x46,
+      0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x83, 0x84,
+      0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7,
+      0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9,
+      0xea, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa,
+    ],
+  },
+  acChroma: {
+    bits: [0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 0x77],
+    values: [
+      0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21, 0x31, 0x06, 0x12, 0x41, 0x51, 0x07, 0x61, 0x71, 0x13, 0x22, 0x32, 0x81, 0x08, 0x14, 0x42, 0x91, 0xa1, 0xb1, 0xc1, 0x09, 0x23, 0x33, 0x52,
+      0xf0, 0x15, 0x62, 0x72, 0xd1, 0x0a, 0x16, 0x24, 0x34, 0xe1, 0x25, 0xf1, 0x17, 0x18, 0x19, 0x1a, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x43, 0x44, 0x45,
+      0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x82,
+      0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5,
+      0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8,
+      0xe9, 0xea, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa,
+    ],
+  },
+};
+
+/** Canonical codes for a table: symbol -> { code, len }. */
+function huffmanCodes({ bits, values }) {
+  const codes = new Map();
+  let code = 0;
+  let k = 0;
+  for (let len = 1; len <= 16; len++) {
+    for (let i = 0; i < bits[len - 1]; i++) codes.set(values[k++], { code: code++, len });
+    code <<= 1;
+  }
+  return codes;
+}
+
+/** A quantisation table scaled by quality, as libjpeg does (50 is the table as printed). */
+function scaledTable(base, quality) {
+  const q = Math.min(100, Math.max(1, Math.round(quality)));
+  const scale = q < 50 ? 5000 / q : 200 - 2 * q;
+  return base.map((v) => Math.min(255, Math.max(1, Math.floor((v * scale + 50) / 100))));
+}
+
+/** Encodes an RGBA image (alpha ignored; flatten first) as a baseline JPEG. */
+export function encodeJPEG({ width, height, data }, { quality = 90 } = {}) {
+  const qt = [scaledTable(STD_LUMA_Q, quality), scaledTable(STD_CHROMA_Q, quality)];
+  const dc = [huffmanCodes(JPEG_HUFFMAN.dcLuma), huffmanCodes(JPEG_HUFFMAN.dcChroma)];
+  const ac = [huffmanCodes(JPEG_HUFFMAN.acLuma), huffmanCodes(JPEG_HUFFMAN.acChroma)];
+  const out = [];
+  const byte = (b) => out.push(b & 0xff);
+  const word = (w) => {
+    byte(w >> 8);
+    byte(w);
+  };
+
+  word(0xffd8);
+  word(0xffe0);
+  word(16);
+  for (const c of "JFIF") byte(c.charCodeAt(0));
+  [0, 1, 1, 0, 0, 1, 0, 1, 0, 0].forEach(byte);
+  word(0xffdb);
+  word(2 + 2 * 65);
+  for (let t = 0; t < 2; t++) {
+    byte(t);
+    for (let k = 0; k < 64; k++) byte(qt[t][ZIGZAG[k]]);
+  }
+  word(0xffc0);
+  word(17);
+  byte(8);
+  word(height);
+  word(width);
+  byte(3);
+  for (const [id, tq] of [[1, 0], [2, 1], [3, 1]]) {
+    byte(id);
+    byte(0x11);
+    byte(tq);
+  }
+  const tables = [[0x00, JPEG_HUFFMAN.dcLuma], [0x10, JPEG_HUFFMAN.acLuma], [0x01, JPEG_HUFFMAN.dcChroma], [0x11, JPEG_HUFFMAN.acChroma]];
+  word(0xffc4);
+  word(2 + tables.reduce((t, [, h]) => t + 17 + h.values.length, 0));
+  for (const [id, h] of tables) {
+    byte(id);
+    h.bits.forEach(byte);
+    h.values.forEach(byte);
+  }
+  word(0xffda);
+  word(12);
+  [3, 1, 0x00, 2, 0x11, 3, 0x11, 0, 63, 0].forEach(byte);
+
+  // The entropy-coded scan, a bit at a time, with a zero stuffed after every 0xFF.
+  let acc = 0;
+  let nbits = 0;
+  const put = (value, len) => {
+    for (let i = len - 1; i >= 0; i--) {
+      acc = (acc << 1) | ((value >> i) & 1);
+      if (++nbits === 8) {
+        out.push(acc);
+        if (acc === 0xff) out.push(0);
+        acc = 0;
+        nbits = 0;
+      }
+    }
+  };
+  const category = (v) => {
+    let a = Math.abs(v);
+    let n = 0;
+    while (a) {
+      n++;
+      a >>= 1;
+    }
+    return n;
+  };
+  const amplitude = (v, n) => (v < 0 ? v + (1 << n) - 1 : v);
+  const planes = [new Float32Array(64), new Float32Array(64), new Float32Array(64)];
+  const rows = new Float32Array(64);
+  const coef = new Int32Array(64);
+  const pred = [0, 0, 0];
+
+  for (let by = 0; by < height; by += 8) {
+    for (let bx = 0; bx < width; bx += 8) {
+      for (let y = 0; y < 8; y++) {
+        const sy = Math.min(height - 1, by + y);
+        for (let x = 0; x < 8; x++) {
+          const p = (sy * width + Math.min(width - 1, bx + x)) * 4;
+          const r = data[p];
+          const g = data[p + 1];
+          const b = data[p + 2];
+          planes[0][y * 8 + x] = 0.299 * r + 0.587 * g + 0.114 * b - 128;
+          planes[1][y * 8 + x] = -0.168736 * r - 0.331264 * g + 0.5 * b;
+          planes[2][y * 8 + x] = 0.5 * r - 0.418688 * g - 0.081312 * b;
+        }
+      }
+      for (let c = 0; c < 3; c++) {
+        const t = c ? 1 : 0;
+        const s = planes[c];
+        // Forward DCT on the decoder's basis: rows, then columns, then quantise.
+        for (let y = 0; y < 8; y++) {
+          for (let u = 0; u < 8; u++) {
+            let sum = 0;
+            for (let x = 0; x < 8; x++) sum += COS[u * 8 + x] * s[y * 8 + x];
+            rows[y * 8 + u] = sum;
+          }
+        }
+        for (let v = 0; v < 8; v++) {
+          for (let u = 0; u < 8; u++) {
+            let sum = 0;
+            for (let y = 0; y < 8; y++) sum += COS[v * 8 + y] * rows[y * 8 + u];
+            coef[v * 8 + u] = Math.round(sum / qt[t][v * 8 + u]);
+          }
+        }
+        const diff = coef[0] - pred[c];
+        pred[c] = coef[0];
+        const dcCat = category(diff);
+        const d = dc[t].get(dcCat);
+        put(d.code, d.len);
+        if (dcCat) put(amplitude(diff, dcCat), dcCat);
+        let run = 0;
+        for (let k = 1; k < 64; k++) {
+          // Baseline AC sizes stop at 10 bits; only quality near 100 on extreme blocks reaches past it.
+          const v = Math.max(-1023, Math.min(1023, coef[ZIGZAG[k]]));
+          if (!v) {
+            run++;
+            continue;
+          }
+          while (run > 15) {
+            const z = ac[t].get(0xf0);
+            put(z.code, z.len);
+            run -= 16;
+          }
+          const cat = category(v);
+          const a = ac[t].get((run << 4) | cat);
+          put(a.code, a.len);
+          put(amplitude(v, cat), cat);
+          run = 0;
+        }
+        if (run) {
+          const e = ac[t].get(0x00);
+          put(e.code, e.len);
+        }
+      }
+    }
+  }
+  if (nbits) put((1 << (8 - nbits)) - 1, 8 - nbits);
+  word(0xffd9);
+  return Buffer.from(out);
+}
