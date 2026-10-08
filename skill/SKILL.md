@@ -96,6 +96,13 @@ read its facts.
    under the repository's social preview setting. Commit them with the brief that made
    them.
 
+## Checking committed assets (CI)
+Once icons or store graphics are committed, `onmodel check` re-reads them and holds
+them to the same rulebook without the API, so a wrong edit or a lossy re-export is
+caught in CI, not at submission. `onmodel check --name <run>` checks one run, `--in
+<dir>` a directory, and no target checks every run under the output dir; any failure
+exits 2. It is free; add it to the step that would publish the assets.
+
 ## Sprites and animated sequences
 1. **Sheet first.** `onmodel sheet --subject "<who the character is>" --name <slug>`
    (with `--pixel 32:8` or the config's pixel mode for pixel art). Read the slicing

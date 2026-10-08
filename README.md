@@ -345,6 +345,26 @@ For a character, in `<out>/<name>/`:
 - `sprites/sprites.json` and `sprites/sprites.html`: every attempt, measurement,
   repair and judgement, and the actions playing.
 
+## Checking outputs in CI
+
+Generated assets live in the repository, and a wrong edit, a lossy re-export or an
+alpha channel added by another tool is the kind of thing a store rejects at
+submission, not at review. `onmodel check` re-reads what a run wrote and holds it to
+the same rulebook, without the API, so it fits a commit hook or a CI step.
+
+```bash
+onmodel check --name shop-promo     # one run, by name under --out
+onmodel check --in path/to/run      # or a directory directly
+onmodel check                       # every run under --out
+```
+
+It decodes every raster from disk rather than trusting the verdicts recorded when the
+files were made, so it catches a file resized, re-exported, given an alpha channel or
+deleted since. Icons and store graphics are re-checked against their full rules (exact
+size, no alpha, the byte caps, the safe zones); generated images and sprite atlases,
+which have no platform rule, are held to the lighter promise that they still decode at
+their recorded size. Any failure exits with code 2, naming the file and the rule.
+
 ## Commands
 
 | command | does |
@@ -357,6 +377,7 @@ For a character, in `<out>/<name>/`:
 | `edit --name x --change "..."` | continue a candidate's conversation with one change; measured against its parent and judged |
 | `sheet --subject "..." --name x` | the model sheet: front, side and back views, sliced and measured |
 | `sprites --name x` | each action as a strip, measured against the sheet, repaired, packed and exported |
+| `check [--name x \| --in dir]` | re-check written outputs against the rulebook, no API; no target checks every run under `--out`; exits 2 on failure |
 | `cost [--out dir]` | what every run has cost so far, from the ledger |
 
 Flags for `generate`: `--name slug`, `--count 3`, `--sizes 64,128`, `--pixel 32[:16]`,
@@ -367,8 +388,9 @@ auto|#hex|none`, `--size 1K`, `--aspect 1:1`, `--model id`, `--judge id`,
 `--pick 2`, `--no-sheet`. For `store`: `--subject "..."`, `--targets
 play-feature,og,github`, `--mark logo.png`, `--count 3`, `--size 2K`, `--budget 2`,
 `--no-judge`. For `edit`: `--candidate 2` or `2e1` (the pick by default),
-`--change "..."`, `--in dir`, `--no-judge`. For every command:
-`--config`, `--out`, `--brief`, `--json`.
+`--change "..."`, `--in dir`, `--no-judge`. For `check`: `--name x` or `--in dir`,
+else every run under `--out`. For every command: `--config`, `--out`, `--brief`,
+`--json`.
 
 ## Configuration
 

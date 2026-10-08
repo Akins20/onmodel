@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- A no-API gate (`onmodel check`): re-read what a run already wrote and hold it to
+  the same rulebook, so a store or a launcher never finds the problem first. It calls
+  nothing and costs nothing, and it decodes every raster from disk rather than
+  trusting the verdicts recorded when it was made, so a file resized, re-exported,
+  given an alpha channel or deleted since is caught. Icons and store graphics carry
+  hard platform rules and are re-checked in full (each icon's rule is now kept in
+  `icons.json` for this); generated images and sprite atlases are held to the lighter
+  promise that they still decode at their recorded size. `--name` or `--in` checks one
+  run, no target checks every run under `--out`; any failure exits 2. Verified against
+  the live Pay in Style outputs (twelve files, all still passing) and on a size
+  mismatch, a stray alpha channel and a missing file.
 - Store graphics (`onmodel store`): one on-brand hero is painted by the model,
   full-bleed and without text, judged against the brief like any candidate, and then
   cropped to cover each target's exact canvas and written as a 24-bit PNG with no
