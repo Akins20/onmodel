@@ -2,7 +2,8 @@
 import { parseArgs } from "node:util";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
-import { loadConfig, init } from "../src/config.mjs";
+import { loadConfig, init, parseActions } from "../src/config.mjs";
+import { estimatePlan } from "../src/plan.mjs";
 import { listModels } from "../src/gemini.mjs";
 import { resolveImagePrice, resolveTextPrice, PRICING_AS_OF } from "../src/pricing.mjs";
 import { generate, slug } from "../src/generate.mjs";
@@ -39,6 +40,8 @@ Commands
                                     then pack the atlas with JSON, CSS and C exports and APNG/GIF previews
   check [--name x | --in dir]       re-check written outputs against the rulebook, no API (a CI gate);
                                     no target checks every run under --out. Exits 2 on any failure.
+  price [--subjects N] [--store]    what a planned batch would cost before it runs, no API
+        [--sprites "walk:6;run:8"] [--count 3] [--size 2K] [--no-judge]
   cost [--out dir]                  what every run has cost so far, from the ledger
 
 Flags for every command
@@ -78,6 +81,9 @@ const OPTIONS = {
   candidate: { type: "string" },
   mark: { type: "string" },
   targets: { type: "string" },
+  subjects: { type: "string" },
+  sprites: { type: "string" },
+  store: { type: "boolean" },
   change: { type: "string" },
   in: { type: "string" },
   json: { type: "boolean" },
@@ -227,6 +233,29 @@ async function main() {
       const out = [`checked ${runs.length} output set${runs.length === 1 ? "" : "s"} across ${dirs.length} run${dirs.length === 1 ? "" : "s"}`, ...lines, failures.length ? `${failures.length} checks failed` : "everything on disk still meets its rules"];
       emit(config, out.join("\n"), { command: "check", runs, failures });
       if (failures.length) process.exitCode = 2;
+      return;
+    }
+    case "price": {
+      const config = await loadConfig(flags);
+      const plan = estimatePlan(config, {
+        subjects: flags.subjects ? Number(flags.subjects) : 0,
+        count: flags.count ? Number(flags.count) : null,
+        size: flags.size ?? null,
+        sprites: flags.sprites ? parseActions(flags.sprites) : [],
+        store: Boolean(flags.store),
+        judge: !flags["no-judge"],
+      });
+      const fmt = (v) => (v == null ? "no price" : `$${v.toFixed(4)}`);
+      const lines = [`estimate on ${plan.model}${plan.judge ? ` + ${plan.judge}` : ""} at ${plan.size}:`];
+      for (const it of plan.items) {
+        const range = it.worst != null && it.worst !== it.best ? `${fmt(it.best)} to ${fmt(it.worst)}` : fmt(it.best);
+        lines.push(`  ${it.label}: ${it.detail}`, `    ${it.images}${it.imagesWorst ? ` to ${it.imagesWorst}` : ""} images${it.judgeCalls ? ` + ${it.judgeCalls} judge call${it.judgeCalls === 1 ? "" : "s"}` : ""} = ${range}`);
+      }
+      lines.push(plan.best === plan.worst ? `total about ${fmt(plan.best)}` : `total ${fmt(plan.best)} to ${fmt(plan.worst)}`);
+      lines.push(`free (no API): ${plan.free.join(", ")}`);
+      for (const a of plan.assumptions) lines.push(`note: ${a}`);
+      if (!plan.priceKnown) lines.push(`(no built-in price for this model; set the config's "pricing" block)`);
+      emit(config, lines.join("\n"), { command: "price", ...plan });
       return;
     }
     case "cost": {

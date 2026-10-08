@@ -120,6 +120,18 @@ export function estimateBatchCost({ images, size = "1K", price, thinkingTokens =
   return Math.round(images * perImage * 1e4) / 1e4;
 }
 
+/**
+ * A dry-run allowance for one judge call, so a plan can be priced before anything
+ * runs: the brief plus each candidate as a small image in, a short JSON verdict and
+ * the judge's thinking out. The token counts are a typical shape, not a measurement,
+ * so this is an estimate and is labelled as one; a real run reports the true cost.
+ */
+export function estimateJudgeCost(price, { candidates = 3, thinkingTokens = 3000 } = {}) {
+  if (!usable(price)) return null;
+  const usage = { promptTokens: 1500 + 320 * Math.max(1, candidates), candidatesTokens: 450, thoughtsTokens: thinkingTokens, cachedTokens: 0 };
+  return estimateTextCost(usage, price);
+}
+
 /** A short description of a price for reports. */
 export function describePrice(price) {
   if (!usable(price)) return "no price";
