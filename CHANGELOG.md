@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Lockups (`onmodel lockup`): a traced symbol and a wordmark set from a font, placed
+  together as the one mark a combination logo is. Neither half is painted; what this adds
+  is the arrangement. The symbol is sized against the cap height rather than the em or the
+  ascender, since the ascender holds room for accents most words never use and sizing to
+  it leaves the symbol looking small; side by side it is centred on the band between the
+  baseline and the cap line rather than on the word's ink, so a descender on one letter
+  cannot drag it off centre. Spacing is measured ink to ink: the traced symbol carries a
+  margin from its crop and the first letter its own side bearing, and counting those in
+  turned a gap of 20 into 30. `--layout beside` or `above`, with `--symbol` and `--gap` in
+  cap heights. One SVG, one Android drawable and one set of tokens covering both halves.
+- A font's cap height, measured off its H rather than read from OS/2, which plenty of
+  fonts leave at zero or simply get wrong, falling back to the table and then to a share
+  of the ascender.
+
 - Wordmarks, set rather than drawn (`onmodel text --string "ACME" --font f.ttf`). The
   image models cannot be trusted with letters, and nothing onmodel measures could catch it
   if one came out wrong: silhouette, colour and drift have no notion of whether a shape is

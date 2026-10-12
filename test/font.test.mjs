@@ -80,18 +80,23 @@ function tinyFont({ unitsPerEm = 1000, advance = 600 } = {}) {
   const hmtx = Buffer.alloc(numGlyphs * 4);
   for (let g = 0; g < numGlyphs; g++) hmtx.writeUInt16BE(advance, g * 4);
 
-  // cmap: one Windows BMP table, format 4, mapping A and B to glyphs 1 and 2.
-  const sub = Buffer.alloc(32);
+  // cmap: one Windows BMP table, format 4, covering A to H through a glyph id array,
+  // which is the form real fonts use and the one worth exercising. A and H are the
+  // square, B is the triangle, and the letters between them are absent.
+  const sub = Buffer.alloc(48);
   sub.writeUInt16BE(4, 0);
-  sub.writeUInt16BE(32, 2);
+  sub.writeUInt16BE(48, 2);
   sub.writeUInt16BE(4, 6); // segCountX2
-  sub.writeUInt16BE(66, 14); // endCode[0]
+  sub.writeUInt16BE(72, 14); // endCode[0] = H
   sub.writeUInt16BE(0xffff, 16); // endCode[1]
   sub.writeUInt16BE(0, 18); // reservedPad
-  sub.writeUInt16BE(65, 20); // startCode[0]
+  sub.writeUInt16BE(65, 20); // startCode[0] = A
   sub.writeUInt16BE(0xffff, 22);
-  sub.writeInt16BE(-64, 24); // idDelta[0]: 65 - 64 = glyph 1
+  sub.writeInt16BE(0, 24); // idDelta[0]: none, the array decides
   sub.writeInt16BE(1, 26);
+  sub.writeUInt16BE(4, 28); // idRangeOffset[0]: the array starts four bytes on
+  sub.writeUInt16BE(0, 30);
+  [1, 2, 0, 0, 0, 0, 0, 1].forEach((g, i) => sub.writeUInt16BE(g, 32 + i * 2));
   const cmapHead = Buffer.alloc(12);
   cmapHead.writeUInt16BE(0, 0);
   cmapHead.writeUInt16BE(1, 2);
@@ -304,4 +309,117 @@ test("a letter the font has not got is reported, not quietly dropped", async () 
 
   await assert.rejects(() => makeText({ config, text: "", fontPath: fontFile, log: () => {} }), /--string/);
   await assert.rejects(() => makeText({ config, text: "A", fontPath: null, log: () => {} }), /--font/);
+});
+
+/** A flat two-colour mark to lock up beside the words. */
+async function markFile(dir) {
+  const { writeFile } = await import("node:fs/promises");
+  const path = (await import("node:path")).default;
+  const { encodePNG } = await import("../src/png.mjs");
+  const S = 64;
+  const data = new Uint8Array(S * S * 4);
+  for (let y = 8; y < 56; y++) {
+    for (let x = 8; x < 56; x++) {
+      const i = (y * S + x) * 4;
+      const inner = x > 20 && x < 44 && y > 20 && y < 44;
+      data.set(inner ? [198, 74, 52, 255] : [32, 38, 46, 255], i);
+    }
+  }
+  const file = path.join(dir, "mark.png");
+  await writeFile(file, encodePNG({ width: S, height: S, data }));
+  return file;
+}
+
+async function lockupSetup(tag) {
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const path = (await import("node:path")).default;
+  const { DEFAULTS, merge, validate } = await import("../src/config.mjs");
+  const dir = await mkdtemp(path.join(tmpdir(), `onmodel-${tag}-`));
+  const fontFile = path.join(dir, "tiny.ttf");
+  await writeFile(fontFile, tinyFont());
+  const brief = path.join(dir, "brief.md");
+  await writeFile(brief, "# Brief\n\n## Product\nA shop.\n\n## Art direction\nFlat.\n");
+  const config = validate(merge(DEFAULTS, { brief, out: path.join(dir, "out") }));
+  config.briefText = "## Palette\n- Charcoal ink #20262e\n- Ember orange #c64a34\n";
+  config.palette = ["#20262e", "#c64a34"];
+  return { dir, fontFile, config, markPath: await markFile(dir) };
+}
+
+/** The `d` of every path the SVG draws, in the order it draws them. */
+const pathsOf = (svg) => [...svg.matchAll(/ d="([^"]+)"/g)].map((m) => m[1]);
+
+test("a lockup puts the symbol beside the word, centred on the cap height", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { makeLockup, pathBounds } = await import("../src/lockup.mjs");
+  const { fontFile, config, markPath } = await lockupSetup("lock1");
+
+  const got = await makeLockup({ config, text: "AB", fontPath: fontFile, markPath, name: "beside", px: 100, gap: 0.5, symbol: 1.2, log: () => {} });
+  assert.equal(got.facts.layout, "beside");
+  assert.equal(got.facts.word.capHeight, 40, "measured off the H, which is 400 units of 1000");
+
+  const svg = await readFile(got.files.svg, "utf8");
+  const paths = pathsOf(svg);
+  assert.ok(paths.length >= 2, "the symbol and the word are both drawn");
+  const word = pathBounds(paths[paths.length - 1]);
+  const sym = pathBounds(paths.slice(0, -1).join(""));
+
+  // Side by side, with a gap between them and no overlap.
+  assert.ok(sym.x1 < word.x0, `symbol ends at ${sym.x1}, word starts at ${word.x0}`);
+  assert.ok(Math.abs(word.x0 - sym.x1 - got.facts.gap) < 2, `gap ${word.x0 - sym.x1}, meant to be ${got.facts.gap}`);
+
+  // The symbol is centred on the band between the baseline and the cap line, NOT on the
+  // word's ink. Neither glyph here descends, so the bottom of the ink is the baseline;
+  // the triangle rises past the cap line, which is exactly the case that would drag the
+  // symbol off centre if the ink were used instead.
+  const baseline = word.y1;
+  const capMiddle = baseline - got.facts.word.capHeight / 2;
+  const symMiddle = (sym.y0 + sym.y1) / 2;
+  assert.ok(Math.abs(symMiddle - capMiddle) < 2, `symbol centre ${symMiddle}, cap band centre ${capMiddle}`);
+  assert.ok(word.y0 < baseline - got.facts.word.capHeight, "and one glyph does rise past the cap line");
+
+  // Sized against the cap height, not the em: 1.2 of a 40px cap height.
+  assert.ok(Math.abs(sym.y1 - sym.y0 - 48) < 2, `symbol is ${sym.y1 - sym.y0} tall, meant to be 48`);
+});
+
+test("stacked, the symbol is centred over the word", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { makeLockup, pathBounds } = await import("../src/lockup.mjs");
+  const { fontFile, config, markPath } = await lockupSetup("lock2");
+
+  const got = await makeLockup({ config, text: "AB", fontPath: fontFile, markPath, name: "above", layout: "above", px: 100, symbol: 2, log: () => {} });
+  const svg = await readFile(got.files.svg, "utf8");
+  const paths = pathsOf(svg);
+  const word = pathBounds(paths[paths.length - 1]);
+  const sym = pathBounds(paths.slice(0, -1).join(""));
+
+  assert.ok(sym.y1 < word.y0, "the symbol sits above the word");
+  const symMid = (sym.x0 + sym.x1) / 2;
+  const wordMid = (word.x0 + word.x1) / 2;
+  assert.ok(Math.abs(symMid - wordMid) < 2, `symbol centre ${symMid}, word centre ${wordMid}`);
+});
+
+test("both halves' colours come through, and the words take the brief's darkest", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { makeLockup } = await import("../src/lockup.mjs");
+  const { fontFile, config, markPath } = await lockupSetup("lock3");
+  const got = await makeLockup({ config, text: "AB", fontPath: fontFile, markPath, name: "colours", px: 80, log: () => {} });
+
+  const names = got.tokens.map((t) => t.name);
+  assert.ok(names.includes("brand-charcoal-ink"), names.join(", "));
+  assert.ok(names.includes("brand-ember-orange"), "the symbol's second colour survives");
+  assert.equal(new Set(names).size, names.length, "and no colour is listed twice");
+
+  const css = await readFile(got.files.css, "utf8");
+  assert.match(css, /--brand-charcoal-ink: #20262e;/);
+  const xml = await readFile(got.files.drawable, "utf8");
+  assert.match(xml, /@color\/brand_charcoal_ink/);
+});
+
+test("a lockup that cannot be made says which half failed", async () => {
+  const { makeLockup } = await import("../src/lockup.mjs");
+  const { fontFile, config, markPath } = await lockupSetup("lock4");
+  await assert.rejects(() => makeLockup({ config, text: "AB", fontPath: fontFile, markPath, layout: "diagonal", log: () => {} }), /--layout/);
+  await assert.rejects(() => makeLockup({ config, text: "", fontPath: fontFile, markPath, log: () => {} }), /--string/);
+  await assert.rejects(() => makeLockup({ config, text: "AB", fontPath: null, markPath, log: () => {} }), /--font/);
 });

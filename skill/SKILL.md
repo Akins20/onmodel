@@ -85,6 +85,13 @@ the font's own outlines, so the verdict is "exact" unless a character is not in 
 or is in it and draws nothing, both of which it names. For a combination mark, set the
 wordmark this way and generate only the symbol beside it.
 
+## Combination marks
+`onmodel lockup --mark <logo.png> --string "ACME" --font <file.ttf>` places a traced
+symbol and a set wordmark together, `--layout beside` or `above`. The symbol's height is
+given in cap heights (`--symbol`, 1.2 by default) and so is the gap (`--gap`, 0.5), so
+both read the same at any type size. Look at the render: the arrangement is the part no
+measurement can judge for you, and it is the part a lockup gets wrong.
+
 ## Vector output
 1. **When to use it.** A logo or brand mark, a flat illustration that should follow the
    theme, art for print, or a sprite wanted as SVG. `onmodel vector --name <run>` (the

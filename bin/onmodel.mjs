@@ -12,6 +12,7 @@ import { editCandidate } from "../src/edit.mjs";
 import { makeIcons } from "../src/icons.mjs";
 import { makeStore } from "../src/store.mjs";
 import { makeText } from "../src/text.mjs";
+import { makeLockup } from "../src/lockup.mjs";
 import { makeVector } from "../src/vectorize.mjs";
 import { checkRun, findRuns, failuresOf } from "../src/check.mjs";
 
@@ -41,6 +42,9 @@ Commands
   text --string "ACME" --font f.ttf  a wordmark or lettermark set from a real font, not drawn: the letters are
        [--name slug] [--px 128]      the type designer's own outlines, so they cannot come out malformed
        [--tracking 20] [--colour #hex] [--no-kerning]                                  (free)
+  lockup --string "ACME" --font f.ttf  a traced symbol and a set wordmark placed together as one mark
+         --mark logo.png or --name run  [--layout beside|above] [--px 128] [--gap 0.5] [--symbol 1.2]
+                                    the symbol is sized and centred on the cap height, not the em (free)
   store --name x [--subject "..."]  an on-brand hero painted, judged, then cropped to each store's exact
         [--targets play-feature,og,github] [--mark logo.png]    canvas as a 24-bit PNG (no alpha)
         [--count 3] [--size 2K] [--budget 2] [--no-judge]
@@ -109,6 +113,9 @@ const OPTIONS = {
   colour: { type: "string" },
   color: { type: "string" },
   "no-kerning": { type: "boolean" },
+  layout: { type: "string" },
+  gap: { type: "string" },
+  symbol: { type: "string" },
   noise: { type: "string" },
   change: { type: "string" },
   in: { type: "string" },
@@ -251,6 +258,40 @@ async function main() {
       ];
       emit(config, lines.join("\n"), { command: "text", ...result });
       if (f.verdict !== "exact") process.exitCode = 2;
+      return;
+    }
+    case "lockup": {
+      const config = await loadConfig(flags);
+      const num = (v, what, lo, hi) => {
+        if (v == null) return null;
+        const n = Number(v);
+        if (!Number.isFinite(n) || n < lo || n > hi) throw new Error(`--${what} must be a number between ${lo} and ${hi}`);
+        return n;
+      };
+      const result = await makeLockup({
+        config,
+        text: flags.string ?? null,
+        fontPath: flags.font ?? null,
+        name: flags.name ?? null,
+        candidate: flags.candidate ?? null,
+        markPath: flags.mark ?? null,
+        layout: flags.layout ?? "beside",
+        px: num(flags.px, "px", 4, 4096) ?? 128,
+        tracking: num(flags.tracking, "tracking", -500, 2000) ?? 0,
+        gap: num(flags.gap, "gap", 0, 8) ?? 0.5,
+        symbol: num(flags.symbol, "symbol", 0.1, 8) ?? 1.2,
+        kerning: !flags["no-kerning"],
+        detail: flags.detail ?? null,
+      });
+      const f = result.facts;
+      const lines = [
+        `${result.name} lockup in ${result.dir}: ${f.verdict} (${f.layout}, ${f.width}x${f.height}, ${f.curves} curves, ${Math.max(1, Math.round(f.bytes / 1024))} KB)`,
+        `symbol ${f.symbol.width}x${f.symbol.height} from ${f.symbol.from} (${f.symbol.verdict}), "${f.word.text}" set in ${f.word.font} at ${f.word.px}, cap height ${f.word.capHeight}, gap ${f.gap}`,
+        ...(f.word.missing.length ? [`not in the font: ${f.word.missing.join(" ")}`] : []),
+        `fills: ${result.tokens.map((t) => `--${t.name}`).join(", ")}`,
+      ];
+      emit(config, lines.join("\n"), { command: "lockup", ...result });
+      if (f.verdict === "incomplete" || f.verdict === "poor") process.exitCode = 2;
       return;
     }
     case "store": {

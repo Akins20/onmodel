@@ -240,6 +240,30 @@ format and is named and turned down rather than read wrongly. Two things can sti
 wrong and both are checked and reported: a character the font has not got, and a character
 the font claims to have but draws nothing for. Anything else exits 2.
 
+## Lockups
+
+```bash
+onmodel lockup --mark logo.png --string "ACME" --font Inter-Bold.ttf --layout beside
+```
+
+A combination mark: the symbol traced and measured as `vector` does it, the words set from
+the font as `text` does it, and the two placed together. Neither half is painted. What this
+adds is the arrangement, which is where a lockup usually goes wrong, and two rules do most
+of the work.
+
+The symbol is sized against the **cap height**, not the em and not the ascender: the
+ascender holds room above the capitals for accents most words never use, so sizing to it
+leaves the symbol looking small beside the word. And side by side, the symbol is centred on
+the band between the baseline and the cap line rather than on the word's ink, because one
+letter with a descender, or an accent on another, should not drag the symbol off centre.
+Spacing is measured between the ink and the ink, since the traced symbol carries a margin
+from its crop and the first letter carries its own side bearing; counting those in turns a
+gap of 20 into 30.
+
+`--layout beside` or `above`, `--symbol` for the symbol's height in cap heights (1.2 by
+default), `--gap` in cap heights (0.5), and the type flags from `text`. Out comes one SVG,
+one Android vector drawable and one set of colour tokens covering both halves.
+
 ## Vector output
 
 ```bash
@@ -513,6 +537,7 @@ their recorded size. Any failure exits with code 2, naming the file and the rule
 | `models [--filter banana]` | the models the key can use, which make images, and the price of each |
 | `generate --subject "..."` | paint a subject from the brief: candidates, keyed, measured, sized, judged |
 | `icons --name x` or `--mark file.png` | every icon Android, iOS, the web and Expo ask for, checked against the rulebook, with mask previews and vector icons when the mark traces (free) |
+| `lockup --mark m.png --string "ACME" --font f.ttf` | a traced symbol and a set wordmark placed together as one combination mark (free) |
 | `text --string "ACME" --font f.ttf` | a wordmark or lettermark set from a real font's own outlines, so the letters cannot come out malformed (free) |
 | `vector --name x` or `--mark file.png` | trace a flat or pixel-art mark into an SVG with brand-named fills and an Android vector drawable, drawn back and measured; `--stroke N` traces line work as centre lines, `--tone N` traces shaded art in N tones, `--mono` cuts it to one colour (free) |
 | `store --name x [--subject "..."]` | an on-brand hero painted and judged, then cropped to the Play feature graphic, the Open Graph and the GitHub previews, no alpha |

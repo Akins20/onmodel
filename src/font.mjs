@@ -330,15 +330,28 @@ export function loadFont(buffer) {
   const kern = readKern(buf, tables.get("kern"));
   const ascender = buf.readInt16BE(tables.get("hhea").offset + 4);
   const descender = buf.readInt16BE(tables.get("hhea").offset + 6);
+  const outlines = (gid) => readGlyph(buf, tables.get("glyf"), tables.get("loca"), long, gid, numGlyphs);
+  // How tall a capital stands. It is what the eye lines a symbol up with, not the
+  // ascender, which includes the room left above for accents. Measured off the H rather
+  // than taken from OS/2, which plenty of fonts leave at zero or simply get wrong.
+  let capHeight = 0;
+  const h = cmap.get(0x48);
+  if (h) for (const contour of outlines(h)) for (const pt of contour) if (pt.y > capHeight) capHeight = pt.y;
+  if (!capHeight) {
+    const os2 = tables.get("OS/2");
+    if (os2 && buf.readUInt16BE(os2.offset) >= 2 && os2.offset + 90 <= buf.length) capHeight = buf.readInt16BE(os2.offset + 88);
+  }
+  if (capHeight <= 0) capHeight = Math.round(ascender * 0.7);
   return {
     unitsPerEm,
     numGlyphs,
     ascender,
     descender,
+    capHeight,
     glyphFor: (codepoint) => cmap.get(codepoint) ?? 0,
     advanceOf: (gid) => advances[gid] ?? 0,
     kernBetween: (a, b) => kern.get(`${a},${b}`) ?? 0,
-    contoursOf: (gid) => readGlyph(buf, tables.get("glyf"), tables.get("loca"), long, gid, numGlyphs),
+    contoursOf: outlines,
     has: (codepoint) => cmap.has(codepoint),
   };
 }
