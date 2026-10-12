@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (2026-10-12)
 
 - Lockups (`onmodel lockup`): a traced symbol and a wordmark set from a font, placed
   together as the one mark a combination logo is. Neither half is painted; what this adds
