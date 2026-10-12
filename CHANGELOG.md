@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-10-12)
 
 - One colour (`onmodel vector --mono`): the art cut at a luminance instead of sorted into
   the colours it has, so a mark becomes a single shape for a stamp, a stencil or one-ink
