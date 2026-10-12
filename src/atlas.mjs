@@ -44,7 +44,7 @@ export function packActions(actions, { padding = 0 } = {}) {
 }
 
 /** The TexturePacker JSON hash, with Aseprite's frameTags and per-frame durations. */
-export function atlasJSON(atlas, { file = "atlas.png", app = "onmodel", version = "0.1.0" } = {}) {
+export function atlasJSON(atlas, { file = "atlas.png", app = "onmodel", version } = {}) {
   const frames = {};
   for (const p of atlas.placements) {
     frames[p.name] = {

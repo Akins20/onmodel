@@ -310,3 +310,14 @@ export async function init({ cwd = process.cwd() } = {}) {
   }
   return written;
 }
+
+/**
+ * This install's own version, read from its package.json, for stamping into the
+ * files it writes. Read rather than written down, so an export can never claim a
+ * version the tool is not.
+ */
+export async function toolVersion() {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const pkg = JSON.parse(await readFile(path.join(here, "..", "package.json"), "utf8"));
+  return pkg.version;
+}

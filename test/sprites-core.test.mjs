@@ -5,6 +5,8 @@ import { silhouette, iou, normalisePair, dominantPalette, paletteDelta, frameDel
 import { packActions, atlasJSON, atlasCSS, atlasHeader } from "../src/atlas.mjs";
 import { encodeAPNG, encodeGIF, gifPalette, apngInfo } from "../src/anim.mjs";
 import { decodePNG, isPNG } from "../src/png.mjs";
+import { toolVersion } from "../src/config.mjs";
+import { readFile } from "node:fs/promises";
 
 /** A transparent canvas with opaque rectangles painted on it: [x, y, w, h, [r, g, b]]. */
 function canvas(width, height, rects) {
@@ -184,4 +186,19 @@ test("GIF has a palette, one image per frame, transparency and a loop", () => {
   for (let i = 0; i < 32 * 32; i++) noisy.data.set([(i * 7) & 255, (i * 13) & 255, (i * 29) & 255, 255], i * 4);
   assert.ok(gifPalette([{ image: noisy }]).length <= 255);
   assert.doesNotThrow(() => encodeGIF([{ image: noisy, delayMs: 50 }]));
+});
+
+test("the atlas stamps the tool's real version, and never a written-down one", async () => {
+  const atlas = packActions([{ name: "idle", fps: 4, frames: [canvas(8, 8, [[0, 0, 8, 8, RED]])] }]);
+
+  // Whatever version it is handed is what lands in the metadata.
+  assert.equal(atlasJSON(atlas, { version: "9.9.9" }).meta.version, "9.9.9");
+
+  // Handed none, the written file carries no version rather than a claimed one.
+  const written = JSON.parse(JSON.stringify(atlasJSON(atlas)));
+  assert.ok(!("version" in written.meta));
+
+  // And the version it is handed in practice is this install's own.
+  const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(await toolVersion(), pkg.version);
 });

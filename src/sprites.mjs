@@ -12,6 +12,7 @@ import { packActions, atlasJSON, atlasCSS, atlasHeader } from "./atlas.mjs";
 import { encodeAPNG, encodeGIF } from "./anim.mjs";
 import { generate, preambleParts, slug } from "./generate.mjs";
 import { spriteImageCounts } from "./plan.mjs";
+import { toolVersion } from "./config.mjs";
 import { renderContactHTML, renderSpritesHTML } from "./html.mjs";
 
 /**
@@ -673,7 +674,7 @@ export async function makeSprites({ config, name, subject = null, judge = true, 
       actions: sheetImage.ranges.map((x) => ({ name: x.name, from: x.from, to: x.to, fps: x.fps })),
     };
     await writeFile(atlas.image, encodePNG(sheetImage.image));
-    await writeFile(atlas.json, JSON.stringify(atlasJSON(sheetImage, { file: `${label}.png` }), null, 2));
+    await writeFile(atlas.json, JSON.stringify(atlasJSON(sheetImage, { file: `${label}.png`, version: await toolVersion() }), null, 2));
     await writeFile(atlas.css, atlasCSS(sheetImage, { file: `${label}.png`, prefix: label, pixelated: Boolean(config.pixel) }));
     await writeFile(atlas.header, atlasHeader(sheetImage, { file: `${label}.png`, prefix, guard: `${prefix}_ATLAS_H` }));
   }
