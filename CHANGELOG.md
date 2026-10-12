@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-10-12)
 
 - Vector output (`onmodel vector`): the image models only paint pixels, so a mark is
   traced after painting. Flat-colour art becomes an SVG and an Android vector
@@ -28,6 +28,11 @@
   checked to draw like its PNG. Pixel art keeps PNGs on Android, which draws vectors
   without crisp edges; a mark that does not trace keeps its PNGs, and the report says
   why.
+- A sprite atlas now stamps the version of the tool that actually wrote it. The
+  TexturePacker metadata carried a written-down `0.1.0`, so every atlas this release
+  wrote would have claimed to come from the previous one; the version is read from the
+  package instead, and an atlas given no version leaves the field out rather than
+  naming the wrong one.
 
 ## 0.1.0 (2026-10-08)
 
