@@ -287,11 +287,12 @@ export function renderVectorHTML(summary, dir) {
     ["Size", `${f.width} x ${f.height}`],
     ["Colours", String(f.colours)],
     ["Shapes", `${f.layers} layers, ${f.loops} outlines, ${pixel ? `${f.points} points` : `${f.curves} curves`}`],
+    ...(f.lines ? [["Centre lines", `${f.lines} stroked at ${f.hairline} px, ${f.lineCurves} curves (line work up to ${f.strokeMax} px wide)`]] : []),
     ["SVG", `${Math.max(1, Math.round(f.bytes / 1024))} KB`],
-    ["Silhouette match", String(f.silhouette)],
+    ["Silhouette match", f.silhouetteCeiling ? `${f.silhouette}, where about ${f.silhouetteCeiling} is the most a ${f.hairline} px line allows` : String(f.silhouette)],
     ["Pixels that kept their colour", `${Math.round(f.colourKept * 1000) / 10}%`],
     ["Colour drift", `${f.drift} (CIE76; snapping to the brand colours counts here)`],
-    ...(pixel ? [] : [["Flat colour", `${Math.round((f.interiorShare ?? 0) * 100)}% of the art, mean error ${f.meanError}`]]),
+    ...(pixel ? [] : [["Flat colour", `${Math.round((f.flatShare ?? f.interiorShare ?? 0) * 100)}% of the part that can be judged, mean error ${f.meanError}`]]),
   ];
   const tokens = (summary.tokens ?? []).map((t) => `<tr><td><span class="swatch" style="background:${esc(t.hex)}"></span><code>--${esc(t.name)}</code></td><td>${esc(t.hex)}</td><td class="meta">${t.brand ? "a brief colour" : "not in the brief's palette"}</td></tr>`).join("");
   const verdictLine = { exact: "<b>Exact.</b> The SVG is the pixel art, every pixel.", good: "<b>A good match.</b> The SVG holds the mark's shape and colours.", approximate: "<b>An approximate match.</b> Look at the red in the difference map before using it.", poor: "<b>A poor match.</b> The trace lost too much of the mark; keep the PNG, or simplify the mark and trace again." }[f.verdict] ?? esc(f.verdict);

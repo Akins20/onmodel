@@ -32,7 +32,8 @@ Commands
   icons --name x [--candidate 2]    every icon Android, iOS, the web and Expo ask for, from one mark, checked
         or --mark logo.png          against a dated rulebook, with mask previews  [--background #hex] (free)
   vector --name x [--candidate 2]   trace a flat or pixel-art mark into an SVG with brand-named fills and an
-         or --mark logo.png         Android vector drawable, drawn back and measured  [--detail low|normal|high] (free)
+         or --mark logo.png         Android vector drawable, drawn back and measured  [--detail low|normal|high]
+                                    [--stroke 4] traces line work no wider than that as stroked centre lines (free)
   store --name x [--subject "..."]  an on-brand hero painted, judged, then cropped to each store's exact
         [--targets play-feature,og,github] [--mark logo.png]    canvas as a 24-bit PNG (no alpha)
         [--count 3] [--size 2K] [--budget 2] [--no-judge]
@@ -90,6 +91,7 @@ const OPTIONS = {
   store: { type: "boolean" },
   sheet: { type: "boolean" },
   detail: { type: "string" },
+  stroke: { type: "string" },
   change: { type: "string" },
   in: { type: "string" },
   json: { type: "boolean" },
@@ -164,13 +166,18 @@ async function main() {
     case "vector": {
       const config = await loadConfig(flags);
       if (flags.detail && !["low", "normal", "high"].includes(flags.detail)) throw new Error("--detail must be low, normal or high");
-      const result = await makeVector({ config, name: flags.name ?? null, candidate: flags.candidate ?? null, markPath: flags.mark ?? null, detail: flags.detail ?? null });
+      let stroke = null;
+      if (flags.stroke != null) {
+        stroke = Number(flags.stroke);
+        if (!Number.isFinite(stroke) || stroke <= 0 || stroke > 64) throw new Error("--stroke must be a width in pixels, between 0 and 64");
+      }
+      const result = await makeVector({ config, name: flags.name ?? null, candidate: flags.candidate ?? null, markPath: flags.mark ?? null, detail: flags.detail ?? null, stroke });
       const f = result.facts ?? {};
       const lines = result.refused
         ? [`${result.name}: not traced. ${result.refused}`, `open ${result.htmlPath}`]
         : [
-            `${result.name} vector in ${result.dir}: ${f.verdict} (${f.mode === "pixel" ? "pixel art, exact" : `${f.colours} colours, ${f.curves} curves`}, ${Math.max(1, Math.round(f.bytes / 1024))} KB)`,
-            `silhouette ${f.silhouette}, ${Math.round(f.colourKept * 1000) / 10}% of pixels kept their colour, drift ${f.drift}`,
+            `${result.name} vector in ${result.dir}: ${f.verdict} (${f.mode === "pixel" ? "pixel art, exact" : `${f.colours} colours, ${f.curves} curves`}${f.lines ? `, ${f.lines} centre line${f.lines === 1 ? "" : "s"} at ${f.hairline} px` : ""}, ${Math.max(1, Math.round(f.bytes / 1024))} KB)`,
+            `silhouette ${f.silhouette}${f.silhouetteCeiling ? ` (about ${f.silhouetteCeiling} is the most a ${f.hairline} px line allows)` : ""}, ${Math.round(f.colourKept * 1000) / 10}% of pixels kept their colour, drift ${f.drift}`,
             `fills: ${result.tokens.map((t) => `--${t.name}`).join(", ")}`,
             `open ${result.htmlPath}`,
           ];

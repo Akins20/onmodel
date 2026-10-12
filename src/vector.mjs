@@ -1,6 +1,7 @@
 import { labOf, deltaE76, medianCut } from "./key.mjs";
 import { sectionOf } from "./brief.mjs";
 import { toHex } from "./color.mjs";
+import { strokeLines } from "./centerline.mjs";
 
 /**
  * Vector output: a picture the image model painted, turned into shapes. The models
@@ -96,24 +97,39 @@ export function flatColours(image, { maxColours = 12, target = 4, alphaMin = 128
   }
   const near = (a, b) => Math.hypot(lab[a * 3] - lab[b * 3], lab[a * 3 + 1] - lab[b * 3 + 1], lab[a * 3 + 2] - lab[b * 3 + 2]) < 8;
   const interior = [];
+  const solid = [];
+  let measurable = 0;
   for (let y = 1; y < height - 1; y++) {
     for (let x = 1; x < width - 1; x++) {
       const i = y * width + x;
       if (data[i * 4 + 3] < alphaMin) continue;
+      solid.push(i);
       const nb = [i - 1, i + 1, i - width, i + width];
-      if (nb.every((j) => data[j * 4 + 3] >= alphaMin && near(i, j))) interior.push(i);
+      if (!nb.every((j) => data[j * 4 + 3] >= alphaMin)) continue;
+      measurable++;
+      if (nb.every((j) => near(i, j))) interior.push(i);
     }
   }
   const interiorShare = opaque ? interior.length / opaque : 0;
-  const step = Math.max(1, Math.floor(interior.length / 30000));
+  // Two different questions, which the one share used to answer at once and get wrong for
+  // line work. How flat the art is can only be asked of a pixel whose four neighbours are
+  // all opaque, so `flatShare` is the share of those that are flat. How much of the art is
+  // too thin to ask at all is `measurable` against `opaque`: a two-pixel stroke has almost
+  // nothing with four opaque neighbours, and judging it by `interiorShare` called a pure
+  // black line painted and textured.
+  const flatShare = measurable ? interior.length / measurable : 0;
+  const thin = measurable < Math.max(16, opaque * 0.05);
+  // Thin art has no interior to sample, so its colours are read off every opaque pixel.
+  const pool = thin ? solid : interior;
+  const step = Math.max(1, Math.floor(pool.length / 30000));
   const samples = [];
   const sampleLab = [];
-  for (let k = 0; k < interior.length; k += step) {
-    const i = interior[k];
+  for (let k = 0; k < pool.length; k += step) {
+    const i = pool[k];
     samples.push([data[i * 4], data[i * 4 + 1], data[i * 4 + 2]]);
     sampleLab.push([lab[i * 3], lab[i * 3 + 1], lab[i * 3 + 2]]);
   }
-  if (!samples.length) return { colours: [], meanError: null, interiorShare: Math.round(interiorShare * 1000) / 1000, opaque, lab };
+  if (!samples.length) return { colours: [], meanError: null, interiorShare: Math.round(interiorShare * 1000) / 1000, flatShare: 0, thin, measurable, opaque, lab };
   // Area decides a median cut, so a thin outline or a small accent would be outvoted by
   // a large background. After the first split, every group of pixels the colours miss
   // by more than `far` seeds a colour of its own, and k-means settles them each time.
@@ -156,7 +172,16 @@ export function flatColours(image, { maxColours = 12, target = 4, alphaMin = 128
   const labs = colours.map((c) => labOf(...c));
   colours = colours.filter((c, i) => !labs.slice(0, i).some((l) => deltaE76(l, labs[i]) < 6));
   const meanError = errors.reduce((t, e) => t + e, 0) / errors.length;
-  return { colours, meanError: Math.round(meanError * 100) / 100, interiorShare: Math.round(interiorShare * 1000) / 1000, opaque, lab };
+  return {
+    colours,
+    meanError: Math.round(meanError * 100) / 100,
+    interiorShare: Math.round(interiorShare * 1000) / 1000,
+    flatShare: Math.round(flatShare * 1000) / 1000,
+    thin,
+    measurable,
+    opaque,
+    lab,
+  };
 }
 
 /**
@@ -684,6 +709,173 @@ export function fitLoop(loop, error) {
   return out;
 }
 
+/**
+ * Indices of the corners of an open polyline. The closed version walks off one end into
+ * the other, which on a line that is not a loop would invent a corner where the two ends
+ * happen to point at each other; here the window stays inside the line and the two ends
+ * are never corners, because a corner is where one curve stops and the next begins.
+ */
+function openCorners(pts, { k = 3, angle = 0.95 } = {}) {
+  const n = pts.length;
+  if (n < 2 * k + 2) return [];
+  const turn = new Float32Array(n);
+  for (let i = k; i < n - k; i++) {
+    const v1 = sub(pts[i], pts[i - k]);
+    const v2 = sub(pts[i + k], pts[i]);
+    const l = len(v1) * len(v2);
+    turn[i] = l > 1e-9 ? Math.acos(Math.max(-1, Math.min(1, dot(v1, v2) / l))) : 0;
+  }
+  const out = [];
+  for (let i = k; i < n - k; i++) {
+    if (turn[i] < angle) continue;
+    let peak = true;
+    for (let d = -k; d <= k; d++) {
+      const j = i + d;
+      if (d && j >= k && j < n - k && turn[j] > turn[i]) peak = false;
+    }
+    if (peak && (!out.length || i - out[out.length - 1] > k)) out.push(i);
+  }
+  return out;
+}
+
+/** A scalar field sampled between its pixels, clamped at the edges. */
+function sampleField(field, w, h, x, y) {
+  const fx = Math.min(w - 1, Math.max(0, x - 0.5));
+  const fy = Math.min(h - 1, Math.max(0, y - 0.5));
+  const x0 = Math.floor(fx);
+  const y0 = Math.floor(fy);
+  const x1 = Math.min(w - 1, x0 + 1);
+  const y1 = Math.min(h - 1, y0 + 1);
+  const tx = fx - x0;
+  const ty = fy - y0;
+  const a = field[y0 * w + x0] * (1 - tx) + field[y0 * w + x1] * tx;
+  const b = field[y1 * w + x0] * (1 - tx) + field[y1 * w + x1] * tx;
+  return a * (1 - ty) + b * ty;
+}
+
+/**
+ * Moves a centre line onto the real middle of the ink and measures how wide it is there.
+ *
+ * The skeleton comes off whole pixels, so it can only ever sit on a pixel centre. A line
+ * an even number of pixels wide has no middle pixel, and its skeleton lands half a pixel
+ * to one side; on a 2.4 px ring that alone held the trace to 64% of the source however
+ * well the width was guessed. Here each point is pushed along the perpendicular onto the
+ * centre of mass of the ink it crosses, which is where the line really is, and the ink it
+ * crosses on the way adds up to how wide the line is, to a fraction of a pixel rather
+ * than the whole pixel a distance transform can tell apart. Shifts are smoothed over
+ * three points, because a profile read per point on its own makes the line shiver.
+ */
+function refineLine(points, field, w, h, reach) {
+  const step = 0.25;
+  const shifts = new Float64Array(points.length);
+  const widths = new Float64Array(points.length);
+  for (let i = 0; i < points.length; i++) {
+    const a = points[Math.max(0, i - 1)];
+    const b = points[Math.min(points.length - 1, i + 1)];
+    let tx = b[0] - a[0];
+    let ty = b[1] - a[1];
+    const tl = Math.hypot(tx, ty);
+    if (tl < 1e-9) continue;
+    tx /= tl;
+    ty /= tl;
+    const nx = -ty;
+    const ny = tx;
+    let moment = 0;
+    let mass = 0;
+    for (let s = -reach; s <= reach + 1e-9; s += step) {
+      const v = sampleField(field, w, h, points[i][0] + nx * s, points[i][1] + ny * s);
+      moment += v * s;
+      mass += v;
+    }
+    if (mass <= 1e-6) continue;
+    shifts[i] = Math.max(-1.5, Math.min(1.5, moment / mass));
+    widths[i] = mass * step;
+  }
+  const out = points.map((p, i) => {
+    const a = points[Math.max(0, i - 1)];
+    const b = points[Math.min(points.length - 1, i + 1)];
+    let tx = b[0] - a[0];
+    let ty = b[1] - a[1];
+    const tl = Math.hypot(tx, ty);
+    if (tl < 1e-9) return p;
+    tx /= tl;
+    ty /= tl;
+    const s = (shifts[Math.max(0, i - 1)] + shifts[i] + shifts[Math.min(points.length - 1, i + 1)]) / 3;
+    return [p[0] - ty * s, p[1] + tx * s];
+  });
+  // The median, so a blob where two lines cross does not drag the whole line thicker.
+  const seen = Array.from(widths).filter((v) => v > 0).sort((a, b) => a - b);
+  const width = seen.length ? seen[seen.length >> 1] : 0;
+  return { points: out, width };
+}
+
+/**
+ * Walks an open line's two ends out to where the ink really stops.
+ *
+ * Thinning eats roughly half the line's width off each end, so a stroke traced from the
+ * skeleton alone finishes short and its round cap leaves a notch in the drawing. Each end
+ * carries on in its own direction while there is still ink under it, which puts the cap
+ * back where the pen lifted.
+ */
+function extendEnds(points, field, w, h, limit, freeStart, freeEnd) {
+  if (points.length < 2 || limit <= 0) return points;
+  const out = points.slice();
+  for (const end of [0, 1]) {
+    if (end === 0 ? !freeStart : !freeEnd) continue;
+    const at = end === 0 ? 0 : out.length - 1;
+    const back = end === 0 ? Math.min(out.length - 1, 3) : Math.max(0, out.length - 4);
+    const from = out[at];
+    let dx = from[0] - out[back][0];
+    let dy = from[1] - out[back][1];
+    const l = Math.hypot(dx, dy);
+    if (l < 1e-9) continue;
+    dx /= l;
+    dy /= l;
+    let far = 0;
+    for (let s = 0.25; s <= limit + 1e-9; s += 0.25) {
+      if (sampleField(field, w, h, from[0] + dx * s, from[1] + dy * s) < 0.5) break;
+      far = s;
+    }
+    if (far <= 0) continue;
+    const tip = [from[0] + dx * far, from[1] + dy * far];
+    if (end === 0) out.unshift(tip);
+    else out.push(tip);
+  }
+  return out;
+}
+
+/** A centre line as cubic Beziers: split at its corners, smooth elsewhere. */
+export function fitPolyline(points, error, closed = false) {
+  if (closed) {
+    const n = points.length;
+    const loop = n > 2 && points[0][0] === points[n - 1][0] && points[0][1] === points[n - 1][1] ? points.slice(0, -1) : points;
+    return loop.length >= 3 ? fitLoop(loop, error) : [];
+  }
+  if (points.length < 2) return [];
+  const cuts = [0, ...openCorners(points), points.length - 1];
+  const out = [];
+  for (let c = 0; c + 1 < cuts.length; c++) {
+    const run = points.slice(cuts[c], cuts[c + 1] + 1);
+    if (run.length < 2) continue;
+    fitCubic(run, tangentAt(run, 0, 1), tangentAt(run, run.length - 1, -1), error, out);
+  }
+  return out;
+}
+
+/**
+ * Centre lines as path text. Unlike a filled loop these are not closed with Z unless the
+ * line really is a ring, because closing an open line would draw a chord back to its start.
+ */
+function strokesToPath(lines, dx, dy) {
+  return lines
+    .map(({ curves, closed }) => {
+      if (!curves.length) return "";
+      const p = (q) => `${r2(q[0] - dx)} ${r2(q[1] - dy)}`;
+      return `M${p(curves[0][0])}${curves.map((c) => `C${p(c[1])} ${p(c[2])} ${p(c[3])}`).join("")}${closed ? "Z" : ""}`;
+    })
+    .join("");
+}
+
 // ---------------------------------------------------------------- pixel art, exactly
 
 /**
@@ -872,11 +1064,53 @@ export function coverage(polys, width, height) {
   return cov;
 }
 
-/** Composites coloured layers (bottom first) into an RGBA image. */
+/**
+ * Draws stroked polylines into a coverage mask: a pixel is covered by however far it is
+ * inside half the stroke width of the line. Measuring the distance to the line, rather
+ * than building an outline around it and filling that, is what a round cap and a round
+ * join already are, so corners and ends come out right with no special case.
+ */
+export function strokeCoverage(polys, width, height, strokeWidth) {
+  const cov = new Float32Array(width * height);
+  const r = Math.max(0.25, strokeWidth / 2);
+  for (const poly of polys) {
+    for (let s = 0; s + 1 < poly.length; s++) {
+      const a = poly[s];
+      const b = poly[s + 1];
+      const vx = b[0] - a[0];
+      const vy = b[1] - a[1];
+      const vv = vx * vx + vy * vy;
+      const x0 = Math.max(0, Math.floor(Math.min(a[0], b[0]) - r - 1));
+      const x1 = Math.min(width - 1, Math.ceil(Math.max(a[0], b[0]) + r + 1));
+      const y0 = Math.max(0, Math.floor(Math.min(a[1], b[1]) - r - 1));
+      const y1 = Math.min(height - 1, Math.ceil(Math.max(a[1], b[1]) + r + 1));
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          const px = x + 0.5 - a[0];
+          const py = y + 0.5 - a[1];
+          let t = vv > 1e-12 ? (px * vx + py * vy) / vv : 0;
+          t = t < 0 ? 0 : t > 1 ? 1 : t;
+          const dx = px - t * vx;
+          const dy = py - t * vy;
+          const edge = r + 0.5 - Math.hypot(dx, dy);
+          const v = edge <= 0 ? 0 : edge >= 1 ? 1 : edge;
+          const i = y * width + x;
+          if (v > cov[i]) cov[i] = v;
+        }
+      }
+    }
+  }
+  return cov;
+}
+
+/**
+ * Composites coloured layers (bottom first) into an RGBA image: every fill first, then
+ * every centre line on top, because a line traced down the middle of its own colour is
+ * never meant to be buried under a colour that sits above it.
+ */
 export function renderLayers(layers, width, height, { crisp = false } = {}) {
   const out = new Uint8Array(width * height * 4);
-  for (const layer of layers) {
-    const cov = coverage(pathToPolygons(layer.d), width, height);
+  const paint = (cov, rgb) => {
     for (let i = 0; i < width * height; i++) {
       let a = cov[i];
       if (crisp) a = a >= 0.5 ? 1 : 0;
@@ -884,9 +1118,21 @@ export function renderLayers(layers, width, height, { crisp = false } = {}) {
       const p = i * 4;
       const da = out[p + 3] / 255;
       const oa = a + da * (1 - a);
-      for (let c = 0; c < 3; c++) out[p + c] = Math.round((layer.rgb[c] * a + out[p + c] * da * (1 - a)) / (oa || 1));
+      for (let c = 0; c < 3; c++) out[p + c] = Math.round((rgb[c] * a + out[p + c] * da * (1 - a)) / (oa || 1));
       out[p + 3] = Math.round(oa * 255);
     }
+  };
+  for (const layer of layers) if (layer.d) paint(coverage(pathToPolygons(layer.d), width, height), layer.rgb);
+  for (const layer of layers) {
+    if (!layer.strokes?.length) continue;
+    // One mask for the whole layer, taking the greater coverage where two of its lines
+    // overlap, so a crossing is not blended over itself and left darker than the line.
+    const cov = new Float32Array(width * height);
+    for (const s of layer.strokes) {
+      const one = strokeCoverage(pathToPolygons(s.d), width, height, s.width);
+      for (let i = 0; i < cov.length; i++) if (one[i] > cov[i]) cov[i] = one[i];
+    }
+    paint(cov, layer.rgb);
   }
   return { width, height, data: out };
 }
@@ -898,7 +1144,17 @@ const DETAIL = { low: 1.6, normal: 0.8, high: 0.4 };
 /** A crop of an RGBA image. */
 function cropImage(image, x0, y0, w, h) {
   const data = new Uint8Array(w * h * 4);
-  for (let y = 0; y < h; y++) data.set(image.data.subarray(((y0 + y) * image.width + x0) * 4, ((y0 + y) * image.width + x0 + w) * 4), y * w * 4);
+  // The crop may reach outside the image, to leave a margin a stroke can stand in; what
+  // falls outside stays transparent.
+  const sx0 = Math.max(0, x0);
+  const sx1 = Math.min(image.width, x0 + w);
+  if (sx1 > sx0) {
+    for (let y = 0; y < h; y++) {
+      const sy = y0 + y;
+      if (sy < 0 || sy >= image.height) continue;
+      data.set(image.data.subarray((sy * image.width + sx0) * 4, (sy * image.width + sx1) * 4), (y * w + (sx0 - x0)) * 4);
+    }
+  }
   return { width: w, height: h, data };
 }
 
@@ -995,14 +1251,20 @@ export function fidelity(source, render, { alphaMin = 128, keep = 15 } = {}) {
  * art is not flat, otherwise the layers, the SVG and Android texts, the render and
  * the facts.
  */
-export function vectorize(image, { palette = [], names = new Map(), detail = "normal", maxColours = 12, flatTarget = 4, minInterior = 0.6, tokenPrefix = "brand", title = "mark", pixel = null } = {}) {
+export function vectorize(image, { palette = [], names = new Map(), detail = "normal", maxColours = 12, flatTarget = 4, minInterior = 0.6, tokenPrefix = "brand", title = "mark", pixel = null, stroke = 0 } = {}) {
   const box = bounds(image, 1);
   if (!box) return { refused: "the image is empty: nothing in it is visible" };
-  const pad = 2;
-  const x0 = Math.max(0, box.x0 - pad);
-  const y0 = Math.max(0, box.y0 - pad);
-  const w = Math.min(image.width, box.x1 + pad + 1) - x0;
-  const h = Math.min(image.height, box.y1 + pad + 1) - y0;
+  // Room for a stroke to stand in. A mark trimmed tight has its outermost line against
+  // the very edge, and a stroke down the middle of it would be drawn half off the canvas,
+  // while the distance transform, which counts outside the image as empty, would read
+  // that line as half the width it is. Filled tracing needs no such room, so it keeps the
+  // old two pixels and never grows the canvas past the source.
+  const pad = stroke > 0 ? Math.ceil(stroke / 2) + 2 : 2;
+  const loose = stroke > 0;
+  const x0 = loose ? box.x0 - pad : Math.max(0, box.x0 - pad);
+  const y0 = loose ? box.y0 - pad : Math.max(0, box.y0 - pad);
+  const w = (loose ? box.x1 + pad + 1 : Math.min(image.width, box.x1 + pad + 1)) - x0;
+  const h = (loose ? box.y1 + pad + 1 : Math.min(image.height, box.y1 + pad + 1)) - y0;
   const src = cropImage(image, x0, y0, w, h);
   const exact = pixel ?? isPixelArt(src);
   // pixel art has no soft edge: a partly transparent pixel is in (from half) or out
@@ -1017,7 +1279,10 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
   }
   const found = exact ? exactColours(src) : flatColours(src, { maxColours, target: flatTarget });
   if (!exact) {
-    if (found.interiorShare < minInterior) return { refused: `this art is textured or painted, not flat: only ${Math.round(found.interiorShare * 100)}% of it is flat colour (at least ${Math.round(minInterior * 100)}% is needed), so tracing it would give thousands of shapes and a worse file than the PNG`, facts: { interiorShare: found.interiorShare } };
+    // Line work is judged by its colours alone. It has no interior to measure, and
+    // measuring it anyway called a pure black two-pixel line painted and textured, which
+    // is as flat as art gets.
+    if (!found.thin && found.flatShare < minInterior) return { refused: `this art is textured or painted, not flat: only ${Math.round(found.flatShare * 100)}% of the part that can be judged is flat colour (at least ${Math.round(minInterior * 100)}% is needed), so tracing it would give thousands of shapes and a worse file than the PNG`, facts: { flatShare: found.flatShare, interiorShare: found.interiorShare } };
     if (found.meanError > flatTarget) return { refused: `this art has gradients or shading: ${found.colours.length} flat colours still miss its pixels by ${found.meanError} on average (at most ${flatTarget} is flat), so a vector would band or need thousands of shapes`, facts: { interiorShare: found.interiorShare, meanError: found.meanError, colours: found.colours.length } };
   }
   const { finals, map } = exact ? { finals: found.colours.map((rgb) => ({ hex: toHex(rgb), rgb, name: null, brand: false })), map: found.colours.map((_, i) => i) } : brandColours(found.colours, palette, names);
@@ -1040,6 +1305,33 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
   }
   const order = exact ? [...finals.keys()] : layerOrder(labels, w, h, finals.length);
   const tolerance = DETAIL[detail] ?? DETAIL.normal;
+  // Centre lines: the parts of a colour no wider than `stroke` pixels are traced as
+  // stroked lines down their middle instead of as filled outlines, and their pixels are
+  // left out of the fill. Off unless asked for: a filled outline is the right shape for
+  // a solid mark, and only line work wants this.
+  const strokesFor = new Map();
+  const strokeCovered = new Uint8Array(w * h);
+  if (!exact && stroke > 0) {
+    for (const c of order) {
+      const got = strokeLines(labels, w, h, c, { maxWidth: stroke });
+      if (!got.lines.length) continue;
+      strokesFor.set(c, got.lines);
+      for (let i = 0; i < w * h; i++) if (got.covered[i]) strokeCovered[i] = 1;
+    }
+  }
+  // Lab for every pixel that shows at all, the soft rim included. `found.lab` stops at the
+  // opaque ones, and the rim is exactly what tells a centre line where the ink really ends.
+  let inkLab = null;
+  if (strokesFor.size) {
+    inkLab = new Float32Array(w * h * 3);
+    for (let i = 0; i < w * h; i++) {
+      if (src.data[i * 4 + 3] === 0) continue;
+      const l = labOf(src.data[i * 4], src.data[i * 4 + 1], src.data[i * 4 + 2]);
+      inkLab[i * 3] = l[0];
+      inkLab[i * 3 + 1] = l[1];
+      inkLab[i * 3 + 2] = l[2];
+    }
+  }
   const layers = [];
   if (exact) {
     for (const c of order) {
@@ -1084,7 +1376,7 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
       const own = order[li];
       const above = new Set(order.slice(li + 1));
       const bin = new Float32Array(w * h);
-      for (let i = 0; i < w * h; i++) bin[i] = labels[i] === own || (interior[i] && above.has(labels[i])) ? 1 : 0;
+      for (let i = 0; i < w * h; i++) bin[i] = (labels[i] === own && !strokeCovered[i]) || (interior[i] && above.has(labels[i])) ? 1 : 0;
       for (let grow = 0; grow < 2; grow++) {
         const next = new Float32Array(bin);
         for (let y = 0; y < h; y++) {
@@ -1099,9 +1391,51 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
       const field = blur(bin, w, h, 0.9);
       for (let i = 0; i < w * h; i++) field[i] = Math.min(field[i], soft[i]);
       const loops = contours(field, w, h, 0.5).filter((l) => Math.abs(polygonArea(l)) >= minLoop);
-      if (!loops.length) continue;
+      const lines = strokesFor.get(order[li]) ?? [];
+      if (!loops.length && !lines.length) continue;
       const fitted = loops.map((l) => fitLoop(l, tolerance));
-      layers.push({ index: order[li], ...finals[order[li]], d: curvesToPath(fitted, 0, 0), loops: loops.length, curves: fitted.reduce((t, c) => t + c.length, 0) });
+      let fittedLines = [];
+      if (lines.length) {
+        // This layer's own ink: how opaque each pixel is, faded out as its colour moves
+        // away from the layer's, so a line is read off its own colour and not a
+        // neighbouring one.
+        const ink = new Float32Array(w * h);
+        const target = labOf(...finals[order[li]].rgb);
+        for (let i = 0; i < w * h; i++) {
+          const a = src.data[i * 4 + 3] / 255;
+          if (a <= 0) continue;
+          const d = deltaE76([inkLab[i * 3], inkLab[i * 3 + 1], inkLab[i * 3 + 2]], target);
+          if (d >= 24) continue;
+          ink[i] = a * (1 - d / 24);
+        }
+        const reach = stroke / 2 + 1.5;
+        fittedLines = lines
+          .map((ln) => {
+            const refined = refineLine(ln.points, ink, w, h, reach);
+            const width = refined.width > 0.3 ? refined.width : ln.width;
+            const whole = ln.closed ? refined.points : extendEnds(refined.points, ink, w, h, width, ln.freeStart, ln.freeEnd);
+            return { curves: fitPolyline(whole, tolerance, ln.closed), closed: ln.closed, width };
+          })
+          .filter((s) => s.curves.length);
+      }
+      // Lines of one width share a path, so a drawing of many strokes is a few paths
+      // rather than one per line.
+      const byWidth = new Map();
+      for (const s of fittedLines) {
+        const k = r2(s.width);
+        if (!byWidth.has(k)) byWidth.set(k, []);
+        byWidth.get(k).push(s);
+      }
+      layers.push({
+        index: order[li],
+        ...finals[order[li]],
+        d: curvesToPath(fitted, 0, 0),
+        loops: loops.length,
+        curves: fitted.reduce((t, c) => t + c.length, 0),
+        strokes: [...byWidth].map(([k, ss]) => ({ width: Number(k), d: strokesToPath(ss, 0, 0) })),
+        lines: fittedLines.length,
+        lineCurves: fittedLines.reduce((t, s) => t + s.curves.length, 0),
+      });
     }
   }
   // The silhouette alone, one path: what a one-colour icon (a themed or notification
@@ -1117,7 +1451,29 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
   }
   const render = renderLayers(layers, w, h, { crisp: exact });
   const fid = fidelity(src, render);
-  const verdict = exact ? (fid.silhouette >= 0.999 && fid.colourKept >= 0.999 ? "exact" : "approximate") : fid.silhouette >= 0.97 && fid.colourKept >= 0.93 ? "good" : fid.silhouette >= 0.93 && fid.colourKept >= 0.85 ? "approximate" : "poor";
+  // How much silhouette agreement is even reachable. A quarter-pixel error along each
+  // edge costs a solid mark almost nothing and a hairline a fifth of itself, so the bar
+  // set for a blob calls every trace of a 2.4 px line poor however exact it is. Where
+  // centre lines were used the width is known, so the bar is set against what that width
+  // allows; the raw figure is still reported beside it.
+  // Where centre lines were used the width is measured; otherwise it is read off how much
+  // of the art has four opaque neighbours, since a line W pixels wide has about (W-2)/W of
+  // itself in that state. Either way the bar moves with the art and not with how it was
+  // traced, so a filled trace and a stroked one of the same drawing stay comparable.
+  const strokeWidths = layers.flatMap((l) => (l.strokes ?? []).map((s) => s.width)).sort((a, b) => a - b);
+  const measured = strokeWidths.length ? strokeWidths[strokeWidths.length >> 1] : 0;
+  const share = exact ? 1 : Math.min(1, (found.measurable ?? 0) / Math.max(1, found.opaque ?? 1));
+  const hairline = measured > 0 ? measured : share >= 0.98 ? 0 : 2 / (1 - share);
+  const ceiling = hairline > 0 ? Math.min(1, 1 - 0.5 / Math.max(1, hairline)) : 1;
+  const verdict = exact
+    ? fid.silhouette >= 0.999 && fid.colourKept >= 0.999
+      ? "exact"
+      : "approximate"
+    : fid.silhouette >= 0.97 * ceiling && fid.colourKept >= 0.93
+      ? "good"
+      : fid.silhouette >= 0.93 * ceiling && fid.colourKept >= 0.85
+        ? "approximate"
+        : "poor";
   const token = (name) => `${tokenPrefix}-${name}`;
   const svg = svgText(layers, w, h, { title, crisp: exact, token });
   const facts = {
@@ -1128,11 +1484,19 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
     layers: layers.length,
     loops: layers.reduce((t, l) => t + l.loops, 0),
     [exact ? "points" : "curves"]: layers.reduce((t, l) => t + l.curves, 0),
+    ...(stroke > 0 && !exact
+      ? {
+          strokeMax: stroke,
+          lines: layers.reduce((t, l) => t + (l.lines ?? 0), 0),
+          lineCurves: layers.reduce((t, l) => t + (l.lineCurves ?? 0), 0),
+        }
+      : {}),
+    ...(hairline > 0 && ceiling < 1 ? { hairline: Math.round(hairline * 100) / 100, silhouetteCeiling: Math.round(ceiling * 1000) / 1000 } : {}),
     bytes: Buffer.byteLength(svg),
     silhouette: fid.silhouette,
     colourKept: fid.colourKept,
     drift: fid.drift,
-    ...(exact ? { hardened } : { interiorShare: found.interiorShare, meanError: found.meanError, detail }),
+    ...(exact ? { hardened } : { interiorShare: found.interiorShare, flatShare: found.flatShare, ...(found.thin ? { thin: true } : {}), meanError: found.meanError, detail }),
     verdict,
   };
   return {
@@ -1174,8 +1538,14 @@ const xmlEsc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").rep
 
 /** The SVG: one path per colour, its fill a brand-named CSS variable with the real colour as fallback. */
 export function svgText(layers, w, h, { title = "mark", crisp = false, token = (n) => n } = {}) {
-  const paths = layers.map((l) => `  <path fill-rule="evenodd" style="fill:var(--${token(l.name)},${l.hex})" d="${l.d}"/>`).join("\n");
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"${crisp ? ' shape-rendering="crispEdges"' : ""}>\n  <title>${xmlEsc(title)}</title>\n${paths}\n</svg>\n`;
+  const colour = (l) => `var(--${token(l.name)},${l.hex})`;
+  const paths = layers.filter((l) => l.d).map((l) => `  <path fill-rule="evenodd" style="fill:${colour(l)}" d="${l.d}"/>`);
+  for (const l of layers) {
+    for (const s of l.strokes ?? []) {
+      paths.push(`  <path fill="none" stroke-width="${r2(s.width)}" stroke-linecap="round" stroke-linejoin="round" style="stroke:${colour(l)}" d="${s.d}"/>`);
+    }
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"${crisp ? ' shape-rendering="crispEdges"' : ""}>\n  <title>${xmlEsc(title)}</title>\n${paths.join("\n")}\n</svg>\n`;
 }
 
 const resName = (name) => name.replace(/[^a-z0-9]+/gi, "_").toLowerCase();
@@ -1186,8 +1556,18 @@ const resName = (name) => name.replace(/[^a-z0-9]+/gi, "_").toLowerCase();
  */
 export function androidText(layers, w, h, { token = (n) => n, size = 48, fill = null } = {}) {
   const scale = size / Math.max(w, h);
-  const paths = layers.map((l) => `    <path\n        android:fillColor="${fill ?? `@color/${resName(token(l.name))}`}"\n        android:fillType="evenOdd"\n        android:pathData="${l.d}" />`).join("\n");
-  return `<?xml version="1.0" encoding="utf-8"?>\n<vector xmlns:android="http://schemas.android.com/apk/res/android"\n    android:width="${Math.round(w * scale)}dp"\n    android:height="${Math.round(h * scale)}dp"\n    android:viewportWidth="${w}"\n    android:viewportHeight="${h}">\n${paths}\n</vector>\n`;
+  const colour = (l) => fill ?? `@color/${resName(token(l.name))}`;
+  const paths = layers
+    .filter((l) => l.d)
+    .map((l) => `    <path\n        android:fillColor="${colour(l)}"\n        android:fillType="evenOdd"\n        android:pathData="${l.d}" />`);
+  for (const l of layers) {
+    for (const s of l.strokes ?? []) {
+      paths.push(
+        `    <path\n        android:fillColor="@android:color/transparent"\n        android:strokeColor="${colour(l)}"\n        android:strokeWidth="${r2(s.width)}"\n        android:strokeLineCap="round"\n        android:strokeLineJoin="round"\n        android:pathData="${s.d}" />`,
+      );
+    }
+  }
+  return `<?xml version="1.0" encoding="utf-8"?>\n<vector xmlns:android="http://schemas.android.com/apk/res/android"\n    android:width="${Math.round(w * scale)}dp"\n    android:height="${Math.round(h * scale)}dp"\n    android:viewportWidth="${w}"\n    android:viewportHeight="${h}">\n${paths.join("\n")}\n</vector>\n`;
 }
 
 export function androidColoursText(colours, { token = (n) => n } = {}) {

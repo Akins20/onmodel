@@ -236,3 +236,87 @@ test("the vector command writes every file for a flat mark, and refuses painted 
   assert.equal(run.status, 2, run.stdout + run.stderr);
   assert.match(run.stdout, /not traced/);
 });
+
+/**
+ * Anti-aliased line art: a ring and a bar of one colour, drawn by how far each pixel is
+ * from the line, which is what a real drawing tool produces and what keeps it out of the
+ * pixel-art path.
+ */
+function lineArt(size, halfWidth, colour) {
+  const data = new Uint8Array(size * size * 4);
+  const c = size / 2;
+  const radius = size * 0.32;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const px = x + 0.5;
+      const py = y + 0.5;
+      const ring = Math.abs(Math.hypot(px - c, py - c) - radius);
+      const bar = px > c - radius && px < c + radius ? Math.abs(py - c) : Infinity;
+      const edge = halfWidth + 0.5 - Math.min(ring, bar);
+      const a = edge <= 0 ? 0 : edge >= 1 ? 1 : edge;
+      if (a <= 0) continue;
+      const i = (y * size + x) * 4;
+      data[i] = colour[0];
+      data[i + 1] = colour[1];
+      data[i + 2] = colour[2];
+      data[i + 3] = Math.round(a * 255);
+    }
+  }
+  return { width: size, height: size, data };
+}
+
+test("line art is flat, not painted: it just has little interior to measure", () => {
+  const art = lineArt(96, 1.2, [27, 77, 62]);
+  const got = vectorize(art, { pixel: false });
+  assert.ok(!got.refused, `refused: ${got.refused}`);
+  // The two measures pull apart here, which is the whole point. Only a fifth of the ink
+  // has four opaque neighbours, so the old share of all of it read as painted; of the
+  // part that can be judged, every pixel is flat.
+  assert.ok(got.facts.interiorShare < 0.3, `interiorShare ${got.facts.interiorShare}`);
+  assert.ok(got.facts.flatShare > 0.9, `flatShare ${got.facts.flatShare}`);
+  assert.ok(got.facts.meanError < 2, `meanError ${got.facts.meanError}`);
+});
+
+test("centre lines trace a ring and its bar as three strokes of the right weight", () => {
+  const art = lineArt(96, 1.2, [27, 77, 62]);
+  const filled = vectorize(art, { pixel: false });
+  const stroked = vectorize(art, { pixel: false, stroke: 4 });
+  assert.ok(!stroked.refused, `refused: ${stroked.refused}`);
+
+  // The drawing is a ring cut in two by a bar, so three lines and no more. Every
+  // skeleton pixel has to land in one of them: an earlier walk left a whole arc in no
+  // run at all and quietly traced five sixths of the picture.
+  assert.equal(stroked.facts.lines, 3, "two arcs and the bar");
+  assert.equal(stroked.facts.strokeMax, 4);
+  assert.match(stroked.svg, /stroke-width="[\d.]+"/);
+  assert.match(stroked.svg, /stroke-linecap="round"/);
+  assert.match(stroked.android, /android:strokeWidth="[\d.]+"/);
+
+  // The line is 2.4 px wide and must be measured as such, to a fraction of a pixel. A
+  // distance transform alone cannot tell 2 px from 1, so this is read off the soft edge.
+  assert.ok(Math.abs(stroked.facts.hairline - 2.4) < 0.15, `hairline ${stroked.facts.hairline}`);
+
+  // Strokes beat outlines on the thing that matters: how much of the source comes back.
+  assert.ok(stroked.facts.silhouette > filled.facts.silhouette, `${stroked.facts.silhouette} vs ${filled.facts.silhouette}`);
+  assert.ok(stroked.facts.colourKept >= 0.9, `colourKept ${stroked.facts.colourKept}`);
+
+  // A hairline can never score like a blob, so the bar it is held to says what its own
+  // width allows, and the raw figure stays on the record beside it.
+  assert.ok(stroked.facts.silhouetteCeiling < 0.85, `ceiling ${stroked.facts.silhouetteCeiling}`);
+  assert.equal(stroked.facts.verdict, "good");
+});
+
+test("a solid mark is left as fills even when centre lines are asked for", () => {
+  const size = 64;
+  const data = new Uint8Array(size * size * 4);
+  for (let y = 12; y < 52; y++) {
+    for (let x = 12; x < 52; x++) {
+      const i = (y * size + x) * 4;
+      data.set([200, 40, 60, 255], i);
+    }
+  }
+  const got = vectorize({ width: size, height: size, data }, { pixel: false, stroke: 4 });
+  assert.ok(!got.refused, `refused: ${got.refused}`);
+  assert.equal(got.facts.lines, 0, "a block is nothing like a stroke");
+  assert.ok(!/stroke-width/.test(got.svg));
+});

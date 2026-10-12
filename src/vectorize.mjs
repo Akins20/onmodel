@@ -17,7 +17,7 @@ import { renderVectorHTML } from "./html.mjs";
 
 const snake = (s) => s.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "").toLowerCase();
 
-export async function makeVector({ config, name = null, candidate = null, markPath = null, detail = null, log = (s) => process.stderr.write(s) }) {
+export async function makeVector({ config, name = null, candidate = null, markPath = null, detail = null, stroke = null, log = (s) => process.stderr.write(s) }) {
   const { mark, file, transparent } = await loadMark({ config, name, candidate, markPath });
   const label = slug(name ?? path.basename(file).replace(/\.[^.]+$/, ""));
   const dir = path.join(config.out, label, "vector");
@@ -36,6 +36,7 @@ export async function makeVector({ config, name = null, candidate = null, markPa
     title: label,
     // a pixel-mode project's sprites are pixel art even when their edges are soft
     pixel: config.pixel ? true : null,
+    stroke: stroke ?? opts.stroke ?? 0,
   });
   const summary = { tool: "onmodel", kind: "vector", name: label, dir, mark: file, markSize: { width: mark.width, height: mark.height }, generatedAt: new Date().toISOString(), ms: Date.now() - started };
   const sourceFile = path.join(dir, `${label}.source.png`);

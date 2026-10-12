@@ -255,6 +255,13 @@ export function skeletonPolylines(skel, width, height, { minSpur = 3 } = {}) {
    * really four. The same hop sends a walk back down a rectangle's top edge instead of
    * turning the corner.
    */
+  // Every middle pixel belongs to exactly one run, and a run claims the ones it walks
+  // over. Marking the pixels rather than the directions walked is what makes the cover
+  // complete: keyed by direction, a walk that left a junction by an unexpected step
+  // cancelled the run that should have covered the way back, and 55 pixels of a ring
+  // ended up in no run at all, so a whole arc of it went untraced.
+  const taken = new Uint8Array(width * height);
+
   const nextStep = (cur, prev) => {
     const cx = cur % width;
     const cy = (cur - cx) / width;
@@ -262,6 +269,8 @@ export function skeletonPolylines(skel, width, height, { minSpur = 3 } = {}) {
     let bestScore = 9;
     for (const j of neighbours(cur)) {
       if (j === prev) continue;
+      // A node is always a legal place to stop, even once another run has ended on it.
+      if (!isNode[j] && taken[j]) continue;
       const jx = j % width;
       const jy = (j - jx) / width;
       const score = Math.abs(jx - cx) + Math.abs(jy - cy) === 1 ? 0 : 1;
@@ -273,60 +282,74 @@ export function skeletonPolylines(skel, width, height, { minSpur = 3 } = {}) {
     return best;
   };
 
-  const runs = [];
-  const walked = new Set();
-  for (let start = 0; start < skel.length; start++) {
-    if (!skel[start] || !isNode[start]) continue;
-    for (const first of neighbours(start)) {
-      // Inside one junction clump there is nothing to walk.
-      if (clump[start] >= 0 && clump[first] === clump[start]) continue;
-      const key = `${start}>${first}`;
-      if (walked.has(key)) continue;
-      const path = [start];
-      let prev = start;
-      let cur = first;
-      for (let guard = 0; guard <= skel.length; guard++) {
-        path.push(cur);
-        if (isNode[cur]) break;
-        const next = nextStep(cur, prev);
-        if (next === undefined) break;
-        prev = cur;
-        cur = next;
-      }
-      const end = path[path.length - 1];
-      walked.add(key);
-      walked.add(`${end}>${path[path.length - 2]}`);
-      runs.push({ pixels: path, a: nodeId(start), b: nodeId(end), closed: false });
-    }
-  }
-
-  // A piece with no node at all is a ring: walk it from any pixel back to itself.
-  const inRun = new Uint8Array(width * height);
-  for (const r of runs) for (const i of r.pixels) inRun[i] = 1;
-  const ringSeed = new Uint8Array(width * height);
-  // Only a run-of-the-middle pixel can be part of a ring. A node left over is already
-  // accounted for by the runs that end on it: the centre of a junction clump belongs to
-  // no run, and without this it would be walked again as a ring of its own.
-  for (let i = 0; i < skel.length; i++) if (skel[i] && !inRun[i] && !isNode[i]) ringSeed[i] = 1;
-  for (const comp of components8(ringSeed, width, height)) {
-    const start = comp[0];
-    const ns = neighbours(start);
-    if (!ns.length) continue;
-    const path = [start];
-    let prev = start;
-    let cur = ns[0];
-    for (let guard = 0; guard <= comp.length + 1; guard++) {
+  const follow = (from, first) => {
+    const path = [from];
+    let prev = from;
+    let cur = first;
+    for (;;) {
       path.push(cur);
-      if (cur === start) break;
+      if (isNode[cur]) break;
+      taken[cur] = 1;
       const next = nextStep(cur, prev);
       if (next === undefined) break;
       prev = cur;
       cur = next;
     }
-    runs.push({ pixels: path, a: start, b: start, closed: path[path.length - 1] === start });
+    return path;
+  };
+
+  const runs = [];
+  const pairs = new Set();
+  for (let start = 0; start < skel.length; start++) {
+    if (!skel[start] || !isNode[start]) continue;
+    for (const first of neighbours(start)) {
+      // Inside one junction clump there is nothing to walk.
+      if (clump[start] >= 0 && clump[first] === clump[start]) continue;
+      if (isNode[first]) {
+        // Two nodes touching without a middle pixel between them: a run of two, once.
+        const key = start < first ? `${start}:${first}` : `${first}:${start}`;
+        if (pairs.has(key)) continue;
+        pairs.add(key);
+        runs.push({ pixels: [start, first], a: nodeId(start), b: nodeId(first), closed: false });
+        continue;
+      }
+      if (taken[first]) continue;
+      const path = follow(start, first);
+      runs.push({ pixels: path, a: nodeId(start), b: nodeId(path[path.length - 1]), closed: false });
+    }
   }
 
-  return prune(runs, deg, minSpur);
+  // Whatever is left has no node on it anywhere, which makes it a ring.
+  for (let start = 0; start < skel.length; start++) {
+    if (!skel[start] || isNode[start] || taken[start]) continue;
+    taken[start] = 1;
+    const path = [start];
+    let prev = -1;
+    let cur = nextStep(start, -1);
+    while (cur !== undefined) {
+      path.push(cur);
+      if (isNode[cur]) break;
+      taken[cur] = 1;
+      const next = nextStep(cur, prev === -1 ? start : prev);
+      prev = cur;
+      cur = next;
+    }
+    // The walk stops when everything around it is claimed, so a ring is told by its last
+    // pixel still touching the first; then the first is repeated to close it.
+    const closed = path.length > 2 && neighbours(path[path.length - 1]).includes(start);
+    if (closed) path.push(start);
+    runs.push({ pixels: path, a: start, b: start, closed });
+  }
+
+  const out = prune(runs, deg, minSpur);
+  // Which ends are really ends. A run that stops at a junction has not run out of ink,
+  // it has met another line, and stretching it on from there would push it past the
+  // corner into its neighbour.
+  for (const r of out) {
+    r.freeStart = !r.closed && deg[r.pixels[0]] <= 1;
+    r.freeEnd = !r.closed && deg[r.pixels[r.pixels.length - 1]] <= 1;
+  }
+  return out;
 }
 
 /** Drops the short whiskers thinning leaves, then joins a node left with two runs. */
@@ -424,6 +447,8 @@ export function strokeLines(labels, width, height, label, { maxWidth = 3, minSpu
     const polys = runs.map((r) => ({
       points: r.pixels.map((i) => [(i % width) + 0.5, Math.floor(i / width) + 0.5]),
       closed: r.closed,
+      freeStart: Boolean(r.freeStart),
+      freeEnd: Boolean(r.freeEnd),
     }));
     const total = polys.reduce((s, p) => s + polylineLength(p.points), 0);
     if (total < 1) continue;
@@ -444,7 +469,7 @@ export function strokeLines(labels, width, height, label, { maxWidth = 3, minSpu
     for (const i of comp) covered[i] = 1;
     for (const p of polys) {
       if (p.points.length < 2) continue;
-      lines.push({ points: p.points, closed: p.closed, width: stroke, pixels: comp.length });
+      lines.push({ points: p.points, closed: p.closed, width: stroke, pixels: comp.length, freeStart: p.freeStart, freeEnd: p.freeEnd });
     }
   }
   return { covered, lines };
