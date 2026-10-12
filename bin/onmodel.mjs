@@ -11,6 +11,7 @@ import { makeSheet, makeSprites } from "../src/sprites.mjs";
 import { editCandidate } from "../src/edit.mjs";
 import { makeIcons } from "../src/icons.mjs";
 import { makeStore } from "../src/store.mjs";
+import { makeText } from "../src/text.mjs";
 import { makeVector } from "../src/vectorize.mjs";
 import { checkRun, findRuns, failuresOf } from "../src/check.mjs";
 
@@ -37,6 +38,9 @@ Commands
                                     many tones instead of refusing it; [--mono] one colour by luminance (the cut is
                                     chosen from the art, or set it with [--threshold 128]), with [--tone N] for
                                     N levels; [--noise 40] ignore shapes under that many pixels (free)
+  text --string "ACME" --font f.ttf  a wordmark or lettermark set from a real font, not drawn: the letters are
+       [--name slug] [--px 128]      the type designer's own outlines, so they cannot come out malformed
+       [--tracking 20] [--colour #hex] [--no-kerning]                                  (free)
   store --name x [--subject "..."]  an on-brand hero painted, judged, then cropped to each store's exact
         [--targets play-feature,og,github] [--mark logo.png]    canvas as a 24-bit PNG (no alpha)
         [--count 3] [--size 2K] [--budget 2] [--no-judge]
@@ -98,6 +102,13 @@ const OPTIONS = {
   tone: { type: "string" },
   mono: { type: "boolean" },
   threshold: { type: "string" },
+  string: { type: "string" },
+  font: { type: "string" },
+  px: { type: "string" },
+  tracking: { type: "string" },
+  colour: { type: "string" },
+  color: { type: "string" },
+  "no-kerning": { type: "boolean" },
   noise: { type: "string" },
   change: { type: "string" },
   in: { type: "string" },
@@ -210,6 +221,36 @@ async function main() {
           ];
       emit(config, lines.join("\n"), { command: "vector", ...result });
       if (result.refused || f.verdict === "poor") process.exitCode = 2;
+      return;
+    }
+    case "text": {
+      const config = await loadConfig(flags);
+      const num = (v, what, lo, hi) => {
+        if (v == null) return null;
+        const n = Number(v);
+        if (!Number.isFinite(n) || n < lo || n > hi) throw new Error(`--${what} must be a number between ${lo} and ${hi}`);
+        return n;
+      };
+      const result = await makeText({
+        config,
+        text: flags.string ?? null,
+        fontPath: flags.font ?? null,
+        name: flags.name ?? null,
+        size: num(flags.px, "px", 4, 4096) ?? 128,
+        tracking: num(flags.tracking, "tracking", -500, 2000) ?? 0,
+        colour: flags.colour ?? flags.color ?? null,
+        kerning: !flags["no-kerning"],
+      });
+      const f = result.facts;
+      const lines = [
+        `${result.name} text in ${result.dir}: ${f.verdict} ("${f.text}" set in ${f.font}, ${f.curves} curves, ${Math.max(1, Math.round(f.bytes / 1024))} KB)`,
+        f.verdict === "exact"
+          ? "the letters are the font's own outlines, so there is nothing to measure and nothing to drift"
+          : `${[f.missing.length ? `not in the font: ${f.missing.join(" ")}` : null, f.blank.length ? `in the font but drawn empty: ${f.blank.join(" ")}` : null, f.inkShare ? null : "the path carries no ink at all"].filter(Boolean).join("; ")}`,
+        `fill: --${result.tokens[0].name}`,
+      ];
+      emit(config, lines.join("\n"), { command: "text", ...result });
+      if (f.verdict !== "exact") process.exitCode = 2;
       return;
     }
     case "store": {

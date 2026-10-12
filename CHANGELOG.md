@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- Wordmarks, set rather than drawn (`onmodel text --string "ACME" --font f.ttf`). The
+  image models cannot be trusted with letters, and nothing onmodel measures could catch it
+  if one came out wrong: silhouette, colour and drift have no notion of whether a shape is
+  an R, so a mangled word would be reported as a perfect match for the mangled word it was
+  given. Closing that by measuring harder is not possible; closing it by not drawing them
+  is. The letters are read out of the font as the outlines the type designer drew and
+  written as paths, arriving as the same SVG, Android vector drawable and CSS token as
+  every other mark, with the fill named from the brief's palette. TrueType is read
+  directly: the table directory, `cmap` in formats 4 and 12, `glyf` with its composite
+  glyphs, `loca`, `hmtx` advances and `kern` pairs, with the quadratic curves TrueType
+  stores converted to the cubics everything else here writes. OpenType's CFF flavour holds
+  its outlines as Type 2 charstrings, a different parser entirely, and is named and turned
+  down rather than read wrongly. Two things can still go wrong and both are checked: a
+  character the font has not got, and a character the font claims to have but draws
+  nothing for. Verified against a real system font, and Chromium draws the result within
+  8 levels on 98.8% of pixels of onmodel's own render.
+
 ## 0.3.0 (2026-10-12)
 
 - One colour (`onmodel vector --mono`): the art cut at a luminance instead of sorted into

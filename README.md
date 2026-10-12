@@ -219,6 +219,27 @@ foreground, the themed layer and the notification icon. The Android vectors sit 
 serve older ones. Each vector icon is checked to draw like its PNG. Pixel art keeps
 PNGs on Android, which draws vectors without crisp edges.
 
+## Wordmarks, set rather than drawn
+
+```bash
+onmodel text --string "ACME" --font Inter-Bold.ttf --px 128
+```
+
+The image models cannot be trusted with letters, and nothing onmodel measures could catch
+it if one came out wrong: silhouette, colour and drift have no notion of whether that
+shape is an R, so a mangled word would be reported as a perfect match for the mangled word
+it was given. So letters are not painted and not traced. They are read out of the font as
+the outlines the type designer drew, which makes them right by construction rather than
+right on inspection, and arrive as the same SVG, Android vector drawable and CSS token
+every other mark here does, with the fill named from the brief's palette.
+
+TrueType outlines are read directly: the character map, the glyph table with its composite
+glyphs, advance widths and kerning pairs, with quadratic curves converted to the cubics
+everything else here writes. OpenType's CFF flavour keeps its outlines in a different
+format and is named and turned down rather than read wrongly. Two things can still go
+wrong and both are checked and reported: a character the font has not got, and a character
+the font claims to have but draws nothing for. Anything else exits 2.
+
 ## Vector output
 
 ```bash
@@ -492,6 +513,7 @@ their recorded size. Any failure exits with code 2, naming the file and the rule
 | `models [--filter banana]` | the models the key can use, which make images, and the price of each |
 | `generate --subject "..."` | paint a subject from the brief: candidates, keyed, measured, sized, judged |
 | `icons --name x` or `--mark file.png` | every icon Android, iOS, the web and Expo ask for, checked against the rulebook, with mask previews and vector icons when the mark traces (free) |
+| `text --string "ACME" --font f.ttf` | a wordmark or lettermark set from a real font's own outlines, so the letters cannot come out malformed (free) |
 | `vector --name x` or `--mark file.png` | trace a flat or pixel-art mark into an SVG with brand-named fills and an Android vector drawable, drawn back and measured; `--stroke N` traces line work as centre lines, `--tone N` traces shaded art in N tones, `--mono` cuts it to one colour (free) |
 | `store --name x [--subject "..."]` | an on-brand hero painted and judged, then cropped to the Play feature graphic, the Open Graph and the GitHub previews, no alpha |
 | `edit --name x --change "..."` | continue a candidate's conversation with one change; measured against its parent and judged |

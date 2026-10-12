@@ -1,6 +1,6 @@
 ---
 name: onmodel
-description: Produce production art (icons, illustrations, stickers, pixel sprites, store graphics, SVG vectors of flat, line and shaded marks) that stays on brand and on model, from a Gemini image model grounded in the product's real brief, palette and references, with every candidate keyed to transparency, measured, sized and judged. Use when a project needs an app icon, empty-state or onboarding art, a sticker, a game sprite or an animated sprite sheet (a character's actions, packed and exported for an engine), a Play feature graphic or an Open Graph or GitHub link preview, any animated sequence that must stay the same thing from frame to frame, or any image that must match an existing style, and when asked to generate, draw, animate or illustrate something for a product.
+description: Produce production art (icons, illustrations, stickers, pixel sprites, store graphics, SVG vectors of flat, line and shaded marks, wordmarks set from a real font) that stays on brand and on model, from a Gemini image model grounded in the product's real brief, palette and references, with every candidate keyed to transparency, measured, sized and judged. Use when a project needs an app icon, empty-state or onboarding art, a sticker, a game sprite or an animated sprite sheet (a character's actions, packed and exported for an engine), a Play feature graphic or an Open Graph or GitHub link preview, any animated sequence that must stay the same thing from frame to frame, or any image that must match an existing style, and when asked to generate, draw, animate or illustrate something for a product.
 ---
 
 # onmodel: art that stays on model
@@ -75,6 +75,15 @@ read its facts.
    copy `AppIcon.appiconset` into the asset catalog; put `web/*` in the public folder
    and the `head.html` tags in the page head; for Expo, copy `expo/*.png` to
    `./assets` and merge `expo/app.json`. Commit the icons with the mark that made them.
+
+## Wordmarks and lettermarks
+Never ask the painter for letters. It gets them wrong, and nothing onmodel measures can
+tell a good R from a bad one, so a mangled word comes back reported as a perfect match.
+Set them instead: `onmodel text --string "ACME" --font <file.ttf> --px 128`, with
+`--tracking` for letter spacing and `--colour` to pick from the brief. The letters are
+the font's own outlines, so the verdict is "exact" unless a character is not in the font
+or is in it and draws nothing, both of which it names. For a combination mark, set the
+wordmark this way and generate only the symbol beside it.
 
 ## Vector output
 1. **When to use it.** A logo or brand mark, a flat illustration that should follow the
