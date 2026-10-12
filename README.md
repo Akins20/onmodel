@@ -225,6 +225,7 @@ PNGs on Android, which draws vectors without crisp edges.
 onmodel vector --name bag-tag                 # the run's pick, or --candidate 1e1
 onmodel vector --mark logo.png --detail high  # any PNG with transparency
 onmodel vector --mark sketch.png --stroke 6   # line work, traced down the middle
+onmodel vector --mark shaded.png --tone 16    # shaded art, in as many tones as it needs
 ```
 
 The image models only paint pixels, so a vector comes from tracing after the painting,
@@ -242,8 +243,14 @@ and the tool is honest about what traces:
   width; anything wider stays a filled shape, so a mark that is part drawing and part
   solid comes out as both. The width is read off the soft edge of the art, so a 2.4 px
   line is written as 2.42 and a 6 px one as 6.08.
-- **Painted, shaded or textured art** is refused with the measurement that says why,
-  because tracing it would give thousands of shapes and a worse file than the PNG.
+- **Shaded art**, with `--tone <n>`, is traced in up to that many tones rather than
+  refused. Smooth shading becomes nested bands of flat colour, which is what a vector
+  can hold; a lit sphere comes out in 14 tones at 0.6x the size of the same pixels as a
+  PNG, with 99.5% of pixels within a hair of their old colour.
+- **Painted or textured art** is still refused without `--tone`, because tracing it
+  would give thousands of shapes and a worse file than the PNG. With `--tone` it will be
+  attempted and then weighed against a PNG of the same pixels, which is the honest
+  answer: a photograph comes out ten times the size of its own PNG and says so.
 
 You get `<name>.svg`, an Android vector drawable with the colour resources it fills
 from (a `values-night` copy of those colours gives it a dark theme), and a CSS file of
@@ -253,7 +260,10 @@ colour drift, and the size, for a verdict of exact, good, approximate or poor. H
 silhouette agreement is even reachable depends on how thin the art is, since a
 quarter-pixel error costs a solid mark almost nothing and a hairline a fifth of itself,
 so the verdict is set against what the art's own line weight allows and the raw figure
-is reported beside it.
+is reported beside it. Banding is measured separately, because no per-pixel figure can
+see it: flat bands across a gradient can hold every pixel to within a few of its old
+colour while the eye sees rings, so the share of the art where the trace put a step that
+the source does not have is reported, and a trace that bands is never called good.
 `vector.html` shows the source, the SVG as the browser draws it, onmodel's own drawing
 and a map of where they differ. A refusal or a poor match exits with code 2.
 
@@ -462,7 +472,7 @@ their recorded size. Any failure exits with code 2, naming the file and the rule
 | `models [--filter banana]` | the models the key can use, which make images, and the price of each |
 | `generate --subject "..."` | paint a subject from the brief: candidates, keyed, measured, sized, judged |
 | `icons --name x` or `--mark file.png` | every icon Android, iOS, the web and Expo ask for, checked against the rulebook, with mask previews and vector icons when the mark traces (free) |
-| `vector --name x` or `--mark file.png` | trace a flat or pixel-art mark into an SVG with brand-named fills and an Android vector drawable, drawn back and measured; `--stroke N` traces line work as centre lines (free) |
+| `vector --name x` or `--mark file.png` | trace a flat or pixel-art mark into an SVG with brand-named fills and an Android vector drawable, drawn back and measured; `--stroke N` traces line work as centre lines, `--tone N` traces shaded art in N tones (free) |
 | `store --name x [--subject "..."]` | an on-brand hero painted and judged, then cropped to the Play feature graphic, the Open Graph and the GitHub previews, no alpha |
 | `edit --name x --change "..."` | continue a candidate's conversation with one change; measured against its parent and judged |
 | `sheet --subject "..." --name x` | the model sheet: front, side and back views, sliced and measured |
@@ -479,8 +489,8 @@ auto|#hex|none`, `--size 1K`, `--aspect 1:1`, `--model id`, `--judge id`,
 `--pick 2`, `--no-sheet`. For `store`: `--subject "..."`, `--targets
 play-feature,og,github`, `--mark logo.png`, `--count 3`, `--size 2K`, `--budget 2`,
 `--no-judge`. For `vector`: `--candidate 2` or `2e1`, or `--mark file.png`,
-`--detail low|normal|high`, and `--stroke N` to trace line work no wider than N pixels
-as stroked centre lines. For `edit`: `--candidate 2` or `2e1` (the pick by default),
+`--detail low|normal|high`, `--stroke N` to trace line work no wider than N pixels as
+stroked centre lines, and `--tone N` to trace shaded art in up to N tones. For `edit`: `--candidate 2` or `2e1` (the pick by default),
 `--change "..."`, `--in dir`, `--sheet`, `--no-judge`. For `check`: `--name x` or `--in dir`,
 else every run under `--out`. For `price`: `--subjects N`, `--sprites "name:frames;..."`,
 `--store`, `--count`, `--size`, `--no-judge`. For every command: `--config`, `--out`,

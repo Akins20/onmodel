@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+- Full tone (`onmodel vector --tone <n>`): shaded art traced in up to that many tones
+  instead of refused. Smooth shading becomes nested bands of flat colour, which is what a
+  vector can hold, and the colour search splits on a finer error and merges less because
+  tones sit close together by nature. A lit sphere, which a flat trace refuses outright,
+  comes out in 14 tones at 0.6x the size of the same pixels as a PNG with 99.5% of pixels
+  within a hair of their old colour. Painted and textured art is still refused without
+  the flag; with it, the result is weighed against a PNG of the same pixels and reports
+  the ratio, so a photograph says plainly that it came out ten times the size of its own
+  PNG rather than quietly being ten times the size.
+- Banding is measured, which no per-pixel figure can see. Flat bands across a gradient
+  can hold every pixel to within a few of its old colour, so the share that kept its
+  colour stays near perfect while the eye sees rings: the error is small everywhere but
+  it steps, and a step is what we notice. The share of the art where the trace put an
+  edge the source does not have is reported, and a trace that bands is never called good.
+  Art that was banded to begin with keeps its own edges and is not charged for them: a
+  posterised gradient measures 0.07 to 0.10 and cel shading 0.02 to 0.04, at every size
+  tried.
+- A colour search that could not converge ran for ever. Settling drops a colour that wins
+  no pixels of its own, so pushing one and settling could leave the count exactly where
+  it was, and against a smooth gradient, which no finite palette satisfies, the loop's own
+  condition never came true. It is bounded now, and when the mean of what was missed lands
+  between two tones and owns neither, the search seeds on the pixel furthest from every
+  colour instead, which is a colour the art really has. Flat art never showed either
+  fault, because its misses die away after a few colours and the other exit is taken
+  first; the same seeding fix takes banded art from five colours and a mean error of 9.4
+  to nine colours and a mean error of 0.
+- Art with no interior to measure found no colours and wrote an empty SVG, a quiet nothing
+  where a refusal or an honest big file belonged. That happens when no pixel agrees with
+  its neighbours in colour, which is what a photograph looks like from here; the colours
+  are now read off every pixel whenever there is too little interior to read them from.
+
 - Centre lines (`onmodel vector --stroke <px>`): line work traced down the middle as
   stroked lines instead of around both sides as filled outlines. A pen stroke traced as
   an outline is a long thin loop with twice the points, and it stops being a line that

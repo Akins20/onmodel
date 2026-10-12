@@ -1,6 +1,6 @@
 ---
 name: onmodel
-description: Produce production art (icons, illustrations, stickers, pixel sprites, store graphics, SVG vectors of flat marks) that stays on brand and on model, from a Gemini image model grounded in the product's real brief, palette and references, with every candidate keyed to transparency, measured, sized and judged. Use when a project needs an app icon, empty-state or onboarding art, a sticker, a game sprite or an animated sprite sheet (a character's actions, packed and exported for an engine), a Play feature graphic or an Open Graph or GitHub link preview, any animated sequence that must stay the same thing from frame to frame, or any image that must match an existing style, and when asked to generate, draw, animate or illustrate something for a product.
+description: Produce production art (icons, illustrations, stickers, pixel sprites, store graphics, SVG vectors of flat, line and shaded marks) that stays on brand and on model, from a Gemini image model grounded in the product's real brief, palette and references, with every candidate keyed to transparency, measured, sized and judged. Use when a project needs an app icon, empty-state or onboarding art, a sticker, a game sprite or an animated sprite sheet (a character's actions, packed and exported for an engine), a Play feature graphic or an Open Graph or GitHub link preview, any animated sequence that must stay the same thing from frame to frame, or any image that must match an existing style, and when asked to generate, draw, animate or illustrate something for a product.
 ---
 
 # onmodel: art that stays on model
@@ -87,6 +87,11 @@ read its facts.
    parts stay filled. Read the reported width back: it is measured off the art, and if it
    is far from the weight you expect, the `--stroke` figure was too large and swallowed
    something solid.
+   For shaded art, which a flat trace refuses, `--tone <n>` traces it in up to n tones.
+   Smooth shading becomes nested bands, so start at 16 and read what came back: more
+   tones cost size and buy smoothness. Painted and photographic art is the one case a
+   vector can honestly lose to its own PNG, so the report says how its size compares;
+   above 1x, keep the PNG.
 2. **Read the verdict.** Exact (pixel art), good, approximate or poor, from the trace
    drawn back and compared with the source. A refusal names why (gradients, shading,
    texture); do not force it: painted art stays a PNG. For approximate, open
@@ -94,6 +99,11 @@ read its facts.
    the silhouette figure is lower than it looks: a quarter-pixel error costs a hairline a
    fifth of itself, so the verdict is set against what that line weight allows and the
    report says what that was. Judge a drawing by the difference map, not the number.
+   Shaded art has its own trap: every pixel can be within a hair of its old colour while
+   the eye sees rings, because the error is small everywhere but it steps. That is
+   reported as banding, and a trace that bands is never called good however well the
+   per-pixel figures read; look at the render itself, since the difference map only
+   marks pixels that changed a lot and a band edge is not one of those.
 3. **Wire it in.** Every fill is `var(--brand-<name>, #hex)`, and a centre line strokes
    in the same variable, named from the brief's
    palette: inline the SVG and set those variables in the page's tokens (or rename

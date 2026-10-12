@@ -2,6 +2,7 @@ import { labOf, deltaE76, medianCut } from "./key.mjs";
 import { sectionOf } from "./brief.mjs";
 import { toHex } from "./color.mjs";
 import { strokeLines } from "./centerline.mjs";
+import { encodePNG } from "./png.mjs";
 
 /**
  * Vector output: a picture the image model painted, turned into shapes. The models
@@ -82,7 +83,7 @@ const rgbOfHex = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)
  * maxColours) whose mean distance to those pixels is at most `target`. Also how much
  * of the picture is interior at all; textured art has little.
  */
-export function flatColours(image, { maxColours = 12, target = 4, alphaMin = 128 } = {}) {
+export function flatColours(image, { maxColours = 12, target = 4, alphaMin = 128, all = false, far = 12, merge = 6 } = {}) {
   const { width, height, data } = image;
   const n = width * height;
   const lab = new Float32Array(n * 3);
@@ -120,7 +121,14 @@ export function flatColours(image, { maxColours = 12, target = 4, alphaMin = 128
   const flatShare = measurable ? interior.length / measurable : 0;
   const thin = measurable < Math.max(16, opaque * 0.05);
   // Thin art has no interior to sample, so its colours are read off every opaque pixel.
-  const pool = thin ? solid : interior;
+  // Full tone reads them off every pixel too: its whole point is the shading, which lives
+  // in the very pixels the interior test throws away for not matching their neighbours.
+  // Art can also have no interior because no pixel agrees with its neighbours in colour,
+  // which is what a photograph or a noise field looks like from here. Sampling an empty
+  // interior found no colours at all and wrote an empty SVG, a quiet nothing where a
+  // refusal or an honest big file belonged, so the colours are read off every pixel
+  // whenever there is too little interior to read them from.
+  const pool = all || thin || interior.length < Math.max(16, solid.length * 0.02) ? solid : interior;
   const step = Math.max(1, Math.floor(pool.length / 30000));
   const samples = [];
   const sampleLab = [];
@@ -133,7 +141,6 @@ export function flatColours(image, { maxColours = 12, target = 4, alphaMin = 128
   // Area decides a median cut, so a thin outline or a small accent would be outvoted by
   // a large background. After the first split, every group of pixels the colours miss
   // by more than `far` seeds a colour of its own, and k-means settles them each time.
-  const far = 12;
   const minShare = Math.max(8 / samples.length, 0.0005);
   let colours = medianCut(samples, 2);
   let errors = [];
@@ -162,15 +169,33 @@ export function flatColours(image, { maxColours = 12, target = 4, alphaMin = 128
     }
   };
   settle();
-  while (colours.length < maxColours) {
+  // The guard is not decoration. Settling drops a colour that ends up with no pixels of
+  // its own, so pushing one and settling can leave the count exactly where it was; with a
+  // target the art cannot satisfy, which is any smooth gradient, the condition never
+  // comes true and the loop runs for ever. Flat art never showed it because its misses
+  // die away after a few colours and the other exit is taken first.
+  for (let guard = 0; colours.length < maxColours && guard < maxColours * 3 + 8; guard++) {
     const missed = samples.filter((_, i) => errors[i] > far);
     if (missed.length / samples.length <= minShare) break;
+    const before = colours.length;
     colours.push(medianCut(missed, 1)[0]);
     settle();
+    if (colours.length <= before) {
+      // The mean of everything missed can land between two tones, owning none of either,
+      // and settling drops it again. On art banded into steps that happens from the first
+      // try, and the search stopped five colours in with the bands themselves still
+      // missing. Seed on the pixel furthest from every colour instead: it is a colour the
+      // art really has, so it keeps at least itself and the search carries on.
+      let worst = 0;
+      for (let i = 1; i < errors.length; i++) if (errors[i] > errors[worst]) worst = i;
+      colours.push(samples[worst]);
+      settle();
+      if (colours.length <= before) break;
+    }
   }
   // two colours that ended up within a hair of each other are one colour
   const labs = colours.map((c) => labOf(...c));
-  colours = colours.filter((c, i) => !labs.slice(0, i).some((l) => deltaE76(l, labs[i]) < 6));
+  colours = colours.filter((c, i) => !labs.slice(0, i).some((l) => deltaE76(l, labs[i]) < merge));
   const meanError = errors.reduce((t, e) => t + e, 0) / errors.length;
   return {
     colours,
@@ -1242,8 +1267,51 @@ export function fidelity(source, render, { alphaMin = 128, keep = 15 } = {}) {
     silhouette: union ? Math.round((inter / union) * 1000) / 1000 : 1,
     colourKept: opaque ? Math.round((kept / opaque) * 1000) / 1000 : 1,
     drift: both ? Math.round((drift / both) * 100) / 100 : 0,
+    banding: banding(source, render, alphaMin),
     diff: { width: source.width, height: source.height, data: diff },
   };
+}
+
+/**
+ * The share of the art where the trace put an edge that the source does not have.
+ *
+ * Banding is the one thing a per-pixel measure cannot see. Posterising a gradient into
+ * flat bands can hold every pixel to within a few of its old colour, so the share that
+ * kept its colour stays near perfect, while the eye sees rings: the error is small
+ * everywhere but it steps, and a step is what we notice. Comparing how sharply each
+ * pixel differs from its neighbours, in the trace against the source, finds exactly
+ * those steps, and nothing else about the trace creates them.
+ */
+function banding(source, render, alphaMin, step = 7) {
+  const { width: w, height: h } = source;
+  const lum = (d, i) => 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+  let inside = 0;
+  let stepped = 0;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      // Only where both are solid, so the silhouette's own edge is not read as a band.
+      if (source.data[i * 4 + 3] < alphaMin || render.data[i * 4 + 3] < alphaMin) continue;
+      let edgy = true;
+      for (const j of [i - 1, i + 1, i - w, i + w]) {
+        if (source.data[j * 4 + 3] < alphaMin || render.data[j * 4 + 3] < alphaMin) edgy = false;
+      }
+      if (!edgy) continue;
+      inside++;
+      let sMax = 0;
+      let rMax = 0;
+      for (const j of [i - 1, i + 1, i - w, i + w]) {
+        sMax = Math.max(sMax, Math.abs(lum(source.data, i) - lum(source.data, j)));
+        rMax = Math.max(rMax, Math.abs(lum(render.data, i) - lum(render.data, j)));
+      }
+      // An invented edge is a step in the trace where the source was smooth. Asking only
+      // that the trace steps more than the source is too weak a test: at a real band edge
+      // both step hard, and the difference between two large numbers sat right on top of
+      // the difference for a gradient, leaving nothing to set a threshold between.
+      if (rMax > step && sMax < step / 2.5) stepped++;
+    }
+  }
+  return inside ? Math.round((stepped / inside) * 1000) / 1000 : 0;
 }
 
 /**
@@ -1251,7 +1319,7 @@ export function fidelity(source, render, { alphaMin = 128, keep = 15 } = {}) {
  * art is not flat, otherwise the layers, the SVG and Android texts, the render and
  * the facts.
  */
-export function vectorize(image, { palette = [], names = new Map(), detail = "normal", maxColours = 12, flatTarget = 4, minInterior = 0.6, tokenPrefix = "brand", title = "mark", pixel = null, stroke = 0 } = {}) {
+export function vectorize(image, { palette = [], names = new Map(), detail = "normal", maxColours = 12, flatTarget = 4, minInterior = 0.6, tokenPrefix = "brand", title = "mark", pixel = null, stroke = 0, tone = 0 } = {}) {
   const box = bounds(image, 1);
   if (!box) return { refused: "the image is empty: nothing in it is visible" };
   // Room for a stroke to stand in. A mark trimmed tight has its outermost line against
@@ -1277,8 +1345,20 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
       src.data[i * 4 + 3] = a >= 128 ? 255 : 0;
     }
   }
-  const found = exact ? exactColours(src) : flatColours(src, { maxColours, target: flatTarget });
-  if (!exact) {
+  // Full tone: as many colours as the shading needs rather than the few a flat mark has.
+  // It differs from a flat trace only in how far it is willing to keep splitting and how
+  // close two tones may be and stay apart, since tones sit near each other by nature.
+  // Sampling every pixel rather than the interior was tried and is no better: a smooth
+  // gradient moves slowly enough that its pixels agree with their neighbours anyway, and
+  // on art thin enough to have no interior the fallback already reads every pixel.
+  const toneMax = exact ? 0 : Math.max(0, Math.round(tone || 0));
+  const found = exact
+    ? exactColours(src)
+    : toneMax > 0
+      ? flatColours(src, { maxColours: toneMax, target: flatTarget, far: 4, merge: 3 })
+      : flatColours(src, { maxColours, target: flatTarget });
+  if (!exact && !found.colours.length) return { refused: "no colours could be read from this art: nothing in it is opaque enough to measure", facts: { opaque: found.opaque ?? 0 } };
+  if (!exact && !toneMax) {
     // Line work is judged by its colours alone. It has no interior to measure, and
     // measuring it anyway called a pure black two-pixel line painted and textured, which
     // is as flat as art gets.
@@ -1301,7 +1381,11 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
   else {
     const raw = labelPixels(src, lab, found.colours.map((rgb) => ({ rgb })));
     labels = raw.map((l) => (l < 0 ? -1 : map[l]));
-    labels = cleanLabels(Int16Array.from(labels), w, h, finals.length, { minArea: Math.max(6, Math.round(found.opaque * 0.00005)) });
+    // Full tone leaves far more specks behind, since neighbouring tones are a hair apart
+    // and every bit of noise lands in whichever band it happens to fall; a bigger floor
+    // keeps the trace from turning into thousands of one-pixel shapes.
+    const minArea = toneMax ? Math.max(12, Math.round(found.opaque * 0.0003)) : Math.max(6, Math.round(found.opaque * 0.00005));
+    labels = cleanLabels(Int16Array.from(labels), w, h, finals.length, { minArea });
   }
   const order = exact ? [...finals.keys()] : layerOrder(labels, w, h, finals.length);
   const tolerance = DETAIL[detail] ?? DETAIL.normal;
@@ -1463,13 +1547,24 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
   const strokeWidths = layers.flatMap((l) => (l.strokes ?? []).map((s) => s.width)).sort((a, b) => a - b);
   const measured = strokeWidths.length ? strokeWidths[strokeWidths.length >> 1] : 0;
   const share = exact ? 1 : Math.min(1, (found.measurable ?? 0) / Math.max(1, found.opaque ?? 1));
-  const hairline = measured > 0 ? measured : share >= 0.98 ? 0 : 2 / (1 - share);
+  const estimated = measured > 0 ? measured : share >= 0.98 ? 0 : 2 / (1 - share);
+  // Only thin art needs the allowance, and only thin art should be described as having a
+  // line weight at all. Past about sixteen pixels a quarter-pixel error costs under three
+  // percent, which is noise, and the estimate stops meaning anything: a solid sphere came
+  // out as "a 98 px line", which is not a sentence about a sphere.
+  const hairline = estimated > 0 && estimated < 16 ? estimated : 0;
   const ceiling = hairline > 0 ? Math.min(1, 1 - 0.5 / Math.max(1, hairline)) : 1;
+  // Banding keeps a trace from being called good however well every single pixel came
+  // out. Flat bands across a gradient can hold every pixel to within a few of its old
+  // colour, so the share that kept its colour stays near perfect while the eye sees
+  // rings. Art that was already banded scores about 0.03 here and a posterised gradient
+  // about 0.10, so the line sits between them.
+  const banded = fid.banding > 0.06;
   const verdict = exact
     ? fid.silhouette >= 0.999 && fid.colourKept >= 0.999
       ? "exact"
       : "approximate"
-    : fid.silhouette >= 0.97 * ceiling && fid.colourKept >= 0.93
+    : fid.silhouette >= 0.97 * ceiling && fid.colourKept >= 0.93 && !banded
       ? "good"
       : fid.silhouette >= 0.93 * ceiling && fid.colourKept >= 0.85
         ? "approximate"
@@ -1492,6 +1587,10 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
         }
       : {}),
     ...(hairline > 0 && ceiling < 1 ? { hairline: Math.round(hairline * 100) / 100, silhouetteCeiling: Math.round(ceiling * 1000) / 1000 } : {}),
+    // Full tone is the one mode that can honestly lose to the PNG it came from, so it is
+    // weighed against one: the same pixels, encoded, for a figure rather than a feeling.
+    ...(fid.banding ? { banding: fid.banding } : {}),
+    ...(toneMax ? { tone: toneMax, vsPNG: Math.round((Buffer.byteLength(svg) / Math.max(1, encodePNG(src).length)) * 100) / 100 } : {}),
     bytes: Buffer.byteLength(svg),
     silhouette: fid.silhouette,
     colourKept: fid.colourKept,

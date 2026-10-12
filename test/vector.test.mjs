@@ -320,3 +320,86 @@ test("a solid mark is left as fills even when centre lines are asked for", () =>
   assert.equal(got.facts.lines, 0, "a block is nothing like a stroke");
   assert.ok(!/stroke-width/.test(got.svg));
 });
+
+/** A lit sphere: smooth shading, which a flat trace refuses and full tone is for. */
+function shadedSphere(size = 160, bands = 0) {
+  const data = new Uint8Array(size * size * 4);
+  const c = size / 2;
+  const R = size * 0.4;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const px = x + 0.5 - c;
+      const py = y + 0.5 - c;
+      const r = Math.hypot(px, py);
+      const cover = R + 0.5 - r;
+      const a = cover <= 0 ? 0 : cover >= 1 ? 1 : cover;
+      if (a <= 0) continue;
+      const z = Math.sqrt(Math.max(0, 1 - (r / R) ** 2));
+      const lit = Math.max(0, (-px / R) * 0.5 + (-py / R) * 0.5 + z * 0.7);
+      const k = 0.25 + 0.75 * Math.min(1, lit);
+      const i = (y * size + x) * 4;
+      for (let ch = 0; ch < 3; ch++) {
+        const v = Math.round([52, 108, 196][ch] * k + 255 * Math.max(0, lit - 0.85) * 2);
+        data[i + ch] = bands ? Math.round(v / bands) * bands : v;
+      }
+      data[i + 3] = Math.round(a * 255);
+    }
+  }
+  return { width: size, height: size, data };
+}
+
+test("full tone traces shaded art a flat trace refuses, and beats the PNG doing it", () => {
+  const art = shadedSphere();
+  const flat = vectorize(art, { pixel: false });
+  assert.ok(flat.refused, "a flat trace will not have it");
+  assert.match(flat.refused, /gradients or shading/);
+
+  const toned = vectorize(art, { pixel: false, tone: 16 });
+  assert.ok(!toned.refused, `refused: ${toned.refused}`);
+  assert.ok(toned.facts.colours >= 8, `${toned.facts.colours} colours`);
+  assert.equal(toned.facts.tone, 16);
+  assert.ok(toned.facts.silhouette >= 0.97, `silhouette ${toned.facts.silhouette}`);
+  assert.ok(toned.facts.colourKept >= 0.95, `colourKept ${toned.facts.colourKept}`);
+  // Shading is the one case where a vector can honestly lose to its own PNG, so the
+  // answer is a measured ratio rather than a promise. A sphere comfortably wins.
+  assert.ok(toned.facts.vsPNG < 1, `vsPNG ${toned.facts.vsPNG}`);
+});
+
+test("full tone is never worse than a flat trace on art the flat trace handles", () => {
+  // Banded art already traces well without it, and asking for tones used to make it
+  // worse: the mean of what the colours missed landed between two bands, owned none of
+  // either and was dropped, so the search gave up with the bands still missing.
+  const art = shadedSphere(160, 64);
+  const flat = vectorize(art, { pixel: false });
+  const toned = vectorize(art, { pixel: false, tone: 16 });
+  assert.ok(!flat.refused && !toned.refused);
+  assert.ok(toned.facts.colourKept >= flat.facts.colourKept - 0.02, `${toned.facts.colourKept} vs ${flat.facts.colourKept}`);
+  assert.ok(toned.facts.drift <= flat.facts.drift + 0.5, `drift ${toned.facts.drift} vs ${flat.facts.drift}`);
+  assert.equal(toned.facts.verdict, "good");
+});
+
+test("a colour search that cannot converge still stops", () => {
+  // Settling drops a colour that wins no pixels, so a push can leave the count where it
+  // was. Against a smooth gradient, which no finite palette satisfies, the loop's own
+  // condition never comes true: without a bound it ran for ever.
+  const art = shadedSphere(96);
+  const started = Date.now();
+  const got = vectorize(art, { pixel: false, tone: 64 });
+  assert.ok(Date.now() - started < 20000, "it finished");
+  assert.ok(!got.refused);
+  assert.ok(got.facts.colours <= 64);
+});
+
+test("banding is caught, which no per-pixel measure can see", () => {
+  // A gradient cut into flat bands can hold every pixel to within a few of its old
+  // colour while the eye sees rings: the error is small everywhere but it steps.
+  const smooth = vectorize(shadedSphere(), { pixel: false, tone: 16 });
+  assert.ok(smooth.facts.colourKept >= 0.95, "every pixel is close");
+  assert.ok(smooth.facts.banding > 0.06, `banding ${smooth.facts.banding}`);
+  assert.notEqual(smooth.facts.verdict, "good", "so it is not called good");
+
+  // Art that was banded to begin with keeps its own edges, and those are not invented.
+  const already = vectorize(shadedSphere(160, 64), { pixel: false, tone: 16 });
+  assert.ok(already.facts.banding < 0.06, `banding ${already.facts.banding}`);
+  assert.equal(already.facts.verdict, "good");
+});
