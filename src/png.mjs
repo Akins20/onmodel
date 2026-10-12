@@ -42,6 +42,17 @@ export function isPNG(buffer) {
 }
 
 /**
+ * How big a PNG is, from its header alone, without decoding it. The IHDR is always the
+ * first chunk, so the size is at a fixed place: enough to turn down a file too large to
+ * hold in memory before holding it in memory.
+ */
+export function pngSize(buffer) {
+  if (!isPNG(buffer) || buffer.length < 24) return null;
+  if (buffer.toString("latin1", 12, 16) !== "IHDR") return null;
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+}
+
+/**
  * Decodes a PNG into RGBA. Handles every colour type at bit depths 1 to 16, with
  * palette transparency. Interlaced files are refused with a clear error; screenshots
  * from browsers, devices and design tools are never interlaced.

@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+- One colour (`onmodel vector --mono`): the art cut at a luminance instead of sorted into
+  the colours it has, so a mark becomes a single shape for a stamp, a stencil or one-ink
+  print. The cut is read off the art by Otsu's method, since a pale mark cut at the middle
+  of the range comes out blank; `--threshold` sets it by hand, and `--tone <n>` gives n
+  nested levels, each holding about the same amount of ink. The colour is the average of
+  the ink, so it still snaps to the brief and still arrives as a named variable. Rather
+  than a path of its own, the art is repainted into those levels and traced as the flat
+  mark it then is, which keeps the stacking, the snapping and the measuring.
+- Two traps in cutting by luminance, both of which quietly emptied a mark. Otsu names the
+  top of the dark class, which on flat art is the ink's own luminance, so cutting there
+  put the whole mark halfway up the soft edge at half coverage; the cut is moved into the
+  gap between the two classes, and where the art is continuous there is no gap and nothing
+  moves. And spreading levels evenly from the cut down to black wasted most of them,
+  because a mark's ink sits in a narrow strip of the range: eight levels gave three. They
+  are placed by how much ink is under them instead.
+- `--noise <px>`: the smallest shape worth tracing, in pixels. It was already decided from
+  the size of the art, which is right until it is not.
+- Input is bounded. An image over 16 megapixels is turned down with its size rather than
+  left to look like a hang, since tracing walks every pixel once per colour and again to
+  follow each contour; over 64 megapixels it is turned down before being decoded at all,
+  read from the PNG header, because a decoded pixel is four bytes.
+- The allowance for thin art now applies to the share of pixels that kept their colour as
+  well as to the silhouette. That share counts a pixel against the trace when the render
+  is not solid there at all, so on a hairline it was carrying the same penalty twice and a
+  good one-colour trace of a 3 px line came out poor.
+- Illustrator's Corners dial was built, measured and then taken out again, which is worth
+  recording so it is not built twice. On a rectangle, a five-pointed star and a
+  twelve-tooth cog the output stopped changing at the default and above, because a corner
+  must also be the sharpest turn in its window and a certain distance from the last one,
+  so past a point there are no more corners to find. All the dial could do was find fewer,
+  which rounds off real corners and grows the file, and that trade is what `--detail`
+  already does.
+
 - Full tone (`onmodel vector --tone <n>`): shaded art traced in up to that many tones
   instead of refused. Smooth shading becomes nested bands of flat colour, which is what a
   vector can hold, and the colour search splits on a finer error and merges less because

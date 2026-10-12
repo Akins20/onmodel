@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { decodeImage, encodePNG } from "./image.mjs";
-import { encodePNG24 } from "./png.mjs";
+import { encodePNG24, pngSize } from "./png.mjs";
 import { trim, resize, blit, alphaBounds, fillBackground } from "./key.mjs";
 import { parseColor, toHex } from "./color.mjs";
 import { contrastRatio } from "./pixels.mjs";
@@ -337,6 +337,9 @@ export function buildPreviews(mark, { background, pixel = false }) {
 }
 
 /** Where the mark comes from: a file, or a candidate (or edit) of a run, preferring its grid output in pixel mode. */
+/** A decoded pixel is four bytes, so this is a quarter of a gigabyte of image. */
+const MAX_DECODE_PIXELS = 64e6;
+
 export async function loadMark({ config, name = null, candidate = null, markPath = null }) {
   let file = markPath;
   if (!file) {
@@ -360,7 +363,15 @@ export async function loadMark({ config, name = null, candidate = null, markPath
     file = grid?.file ?? sidecar.files?.image;
     if (!file) throw new Error(`candidate ${id.id} was not painted`);
   }
-  const raw = decodeImage(await readFile(file));
+  const bytes = await readFile(file);
+  // Turn down what cannot be held before holding it. A decoded pixel is four bytes, so
+  // 64 megapixels is a quarter of a gigabyte; past that the decode itself is the failure,
+  // and an out-of-memory crash says nothing useful about which file caused it.
+  const size = pngSize(bytes);
+  if (size && size.width * size.height > MAX_DECODE_PIXELS) {
+    throw new Error(`${file} is ${size.width}x${size.height}, ${Math.round((size.width * size.height) / 1e6)} megapixels; the most that can be read is ${MAX_DECODE_PIXELS / 1e6}. Scale it down first.`);
+  }
+  const raw = decodeImage(bytes);
   if (!alphaBounds(raw)) throw new Error(`${file} is empty: nothing in it is visible`);
   const mark = trim(raw);
   let transparent = false;

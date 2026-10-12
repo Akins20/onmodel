@@ -34,7 +34,9 @@ Commands
   vector --name x [--candidate 2]   trace a flat or pixel-art mark into an SVG with brand-named fills and an
          or --mark logo.png         Android vector drawable, drawn back and measured  [--detail low|normal|high]
                                     [--stroke 4] line work as stroked centre lines; [--tone 16] shaded art in that
-                                    many tones instead of refusing it (free)
+                                    many tones instead of refusing it; [--mono] one colour by luminance (the cut is
+                                    chosen from the art, or set it with [--threshold 128]), with [--tone N] for
+                                    N levels; [--noise 40] ignore shapes under that many pixels (free)
   store --name x [--subject "..."]  an on-brand hero painted, judged, then cropped to each store's exact
         [--targets play-feature,og,github] [--mark logo.png]    canvas as a 24-bit PNG (no alpha)
         [--count 3] [--size 2K] [--budget 2] [--no-judge]
@@ -94,6 +96,9 @@ const OPTIONS = {
   detail: { type: "string" },
   stroke: { type: "string" },
   tone: { type: "string" },
+  mono: { type: "boolean" },
+  threshold: { type: "string" },
+  noise: { type: "string" },
   change: { type: "string" },
   in: { type: "string" },
   json: { type: "boolean" },
@@ -178,13 +183,26 @@ async function main() {
         tone = Number(flags.tone);
         if (!Number.isFinite(tone) || tone < 2 || tone > 256) throw new Error("--tone must be a number of colours, between 2 and 256");
       }
-      const result = await makeVector({ config, name: flags.name ?? null, candidate: flags.candidate ?? null, markPath: flags.mark ?? null, detail: flags.detail ?? null, stroke, tone });
+      let mono = null;
+      if (flags.threshold != null) {
+        const at = Number(flags.threshold);
+        if (!Number.isFinite(at) || at < 0 || at > 255) throw new Error("--threshold must be a luminance from 0 to 255");
+        mono = at;
+      } else if (flags.mono) mono = true;
+      if (flags.threshold != null && !flags.mono) throw new Error("--threshold is the luminance --mono cuts at, so pass --mono too");
+      let noise = null;
+      if (flags.noise != null) {
+        noise = Number(flags.noise);
+        if (!Number.isFinite(noise) || noise < 0 || noise > 1e6) throw new Error("--noise must be an area in pixels");
+      }
+      const result = await makeVector({ config, name: flags.name ?? null, candidate: flags.candidate ?? null, markPath: flags.mark ?? null, detail: flags.detail ?? null, stroke, tone, mono, noise });
       const f = result.facts ?? {};
       const lines = result.refused
         ? [`${result.name}: not traced. ${result.refused}`, `open ${result.htmlPath}`]
         : [
             `${result.name} vector in ${result.dir}: ${f.verdict} (${f.mode === "pixel" ? "pixel art, exact" : `${f.colours} colours, ${f.curves} curves`}${f.lines ? `, ${f.lines} centre line${f.lines === 1 ? "" : "s"} at ${f.hairline} px` : ""}, ${Math.max(1, Math.round(f.bytes / 1024))} KB)`,
             `silhouette ${f.silhouette}${f.silhouetteCeiling ? ` (about ${f.silhouetteCeiling} is the most a ${f.hairline} px line allows)` : ""}, ${Math.round(f.colourKept * 1000) / 10}% of pixels kept their colour, drift ${f.drift}`,
+            ...(f.mono ? [`cut at luminance ${f.cuts.join(", ")}${f.mono > 1 ? ` for ${f.mono} levels` : ""}; anything lighter is not ink and was left out`] : []),
             ...(f.banding > 0.06 ? [`the shading came out in ${f.colours} flat bands and ${Math.round(f.banding * 100)}% of the art has a step the source does not; look at the render, not the difference map, which only shows pixels that changed a lot`] : []),
             ...(f.vsPNG != null ? [f.vsPNG > 1 ? `this SVG is ${f.vsPNG}x the size of the same pixels as a PNG, so keep the PNG unless you need a vector` : `${f.vsPNG}x the size of the same pixels as a PNG`] : []),
             `fills: ${result.tokens.map((t) => `--${t.name}`).join(", ")}`,

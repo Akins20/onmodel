@@ -92,6 +92,11 @@ read its facts.
    tones cost size and buy smoothness. Painted and photographic art is the one case a
    vector can honestly lose to its own PNG, so the report says how its size compares;
    above 1x, keep the PNG.
+   For a one-colour version of a mark, for a stamp, a stencil or one-ink print, `--mono`
+   cuts it at a luminance chosen from the art: darker is ink, lighter is the page. Read
+   the cut back from the report and check what it dropped was meant to go; `--threshold`
+   overrides it, and `--mono --tone n` gives n nested levels. `--noise <px>` sets the
+   smallest shape worth keeping, which is worth raising when a trace comes back speckled.
 2. **Read the verdict.** Exact (pixel art), good, approximate or poor, from the trace
    drawn back and compared with the source. A refusal names why (gradients, shading,
    texture); do not force it: painted art stays a PNG. For approximate, open

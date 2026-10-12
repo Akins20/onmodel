@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { paletteNames, contours, polygonArea, fitLoop, vectorize, pathToPolygons, coverage, svgText, androidText, androidColoursText } from "../src/vector.mjs";
+import { paletteNames, contours, polygonArea, fitLoop, vectorize, pathToPolygons, coverage, svgText, androidText, androidColoursText, otsuThreshold } from "../src/vector.mjs";
 import { makeVector } from "../src/vectorize.mjs";
-import { encodePNG } from "../src/png.mjs";
+import { encodePNG, pngSize } from "../src/png.mjs";
 import { DEFAULTS, merge, validate } from "../src/config.mjs";
 
 /**
@@ -402,4 +402,82 @@ test("banding is caught, which no per-pixel measure can see", () => {
   const already = vectorize(shadedSphere(160, 64), { pixel: false, tone: 16 });
   assert.ok(already.facts.banding < 0.06, `banding ${already.facts.banding}`);
   assert.equal(already.facts.verdict, "good");
+});
+
+test("the luminance cut is chosen from the art, and lands in the gap", () => {
+  // Two flat tones and nothing between them. Otsu names the top of the dark class, which
+  // here is the ink's own luminance; cutting there puts the whole mark halfway up the
+  // soft edge and it came out at half coverage, so the cut belongs in the gap.
+  const size = 40;
+  const data = new Uint8Array(size * size * 4);
+  for (let i = 0; i < size * size; i++) {
+    const dark = i % 2 === 0;
+    data.set(dark ? [20, 20, 20, 255] : [200, 200, 200, 255], i * 4);
+  }
+  const t = otsuThreshold({ width: size, height: size, data });
+  assert.ok(t > 20 && t < 200, `threshold ${t}`);
+  assert.ok(Math.abs(t - 110) < 6, `threshold ${t} should sit between the two tones`);
+});
+
+test("mono keeps the dark and drops the light, in one brand colour", () => {
+  const art = lineArt(96, 1.5, [24, 28, 34]);
+  // a pale wash over one half, which mono should not treat as ink
+  for (let y = 0; y < 48; y++) {
+    for (let x = 0; x < 96; x++) {
+      const p = (y * 96 + x) * 4;
+      if (art.data[p + 3]) continue;
+      art.data.set([228, 228, 232, 255], p);
+    }
+  }
+  const got = vectorize(art, { pixel: false, mono: true });
+  assert.ok(!got.refused, `refused: ${got.refused}`);
+  assert.equal(got.facts.colours, 1, "one colour");
+  assert.equal(got.facts.mono, 1);
+  assert.ok(got.facts.cuts[0] > 34 && got.facts.cuts[0] < 228, `cut ${got.facts.cuts[0]}`);
+
+  // The wash is lighter than the cut, so none of it is ink: the one colour that comes
+  // back is the dark line, not a blend of the two.
+  const [r, g, b] = got.tokens[0].hex.match(/\w\w/g).map((v) => parseInt(v, 16));
+  assert.ok(0.299 * r + 0.587 * g + 0.114 * b < 80, `the colour is ${got.tokens[0].hex}`);
+
+  // It is a hairline, so it is judged against what a line that thin allows, not 0.97.
+  assert.ok(got.facts.silhouetteCeiling < 0.9, `ceiling ${got.facts.silhouetteCeiling}`);
+  assert.notEqual(got.facts.verdict, "poor");
+});
+
+test("mono with levels gives nested bands, as many as the art really has", () => {
+  const one = vectorize(shadedSphere(), { pixel: false, mono: true });
+  const many = vectorize(shadedSphere(), { pixel: false, mono: true, tone: 4 });
+  assert.equal(one.facts.colours, 1);
+  assert.equal(one.facts.cuts.length, 1);
+  assert.ok(many.facts.cuts.length > 1, `cuts ${many.facts.cuts}`);
+  assert.ok(many.facts.colours > one.facts.colours, `${many.facts.colours} vs ${one.facts.colours}`);
+  // Cuts step downwards: each level sits inside the one before it.
+  for (let i = 1; i < many.facts.cuts.length; i++) assert.ok(many.facts.cuts[i] < many.facts.cuts[i - 1]);
+});
+
+test("noise sets the smallest shape worth tracing", () => {
+  const art = lineArt(96, 1.2, [27, 77, 62]);
+  const fine = vectorize(art, { pixel: false, noise: 4 });
+  const coarse = vectorize(art, { pixel: false, noise: 4000 });
+  assert.ok(fine.facts.loops > coarse.facts.loops, `${fine.facts.loops} vs ${coarse.facts.loops}`);
+});
+
+test("an image too large to trace is turned down with its size, not left to hang", () => {
+  const huge = { width: 5000, height: 5000, data: new Uint8Array(4) };
+  const got = vectorize(huge, { pixel: false, maxPixels: 16e6 });
+  assert.ok(got.refused);
+  assert.match(got.refused, /5000x5000/);
+  assert.match(got.refused, /megapixels/);
+  assert.equal(got.facts.width, 5000);
+});
+
+test("a PNG's size is read from its header, without decoding it", () => {
+  // The point is to turn down a file too large to hold before holding it, so this must
+  // not go near the pixels.
+  const img = { width: 300, height: 170, data: new Uint8Array(300 * 170 * 4) };
+  const bytes = encodePNG(img);
+  assert.deepEqual(pngSize(bytes), { width: 300, height: 170 });
+  assert.equal(pngSize(Buffer.from("not a png at all")), null);
+  assert.equal(pngSize(bytes.subarray(0, 20)), null);
 });

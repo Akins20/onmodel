@@ -289,6 +289,7 @@ export function renderVectorHTML(summary, dir) {
     ["Shapes", `${f.layers} layers, ${f.loops} outlines, ${pixel ? `${f.points} points` : `${f.curves} curves`}`],
     ...(f.lines ? [["Centre lines", `${f.lines} stroked at ${f.hairline} px, ${f.lineCurves} curves (line work up to ${f.strokeMax} px wide)`]] : []),
     ...(f.tone ? [["Full tone", `${f.colours} tones found, up to ${f.tone} asked for`]] : []),
+    ...(f.mono ? [["One colour", `cut at luminance ${f.cuts.join(", ")}${f.mono > 1 ? `, for ${f.mono} levels` : ""}; ${f.colours} came back, since levels that snap to the same brand colour are one`]] : []),
     ["SVG", f.vsPNG != null ? `${Math.max(1, Math.round(f.bytes / 1024))} KB, ${f.vsPNG}x the same pixels as a PNG${f.vsPNG > 1 ? " (so keep the PNG unless you need a vector)" : ""}` : `${Math.max(1, Math.round(f.bytes / 1024))} KB`],
     ["Silhouette match", f.silhouetteCeiling ? `${f.silhouette}, where about ${f.silhouetteCeiling} is the most a ${f.hairline} px line allows` : String(f.silhouette)],
     ["Pixels that kept their colour", `${Math.round(f.colourKept * 1000) / 10}%`],

@@ -660,7 +660,7 @@ export function fitCubic(points, tHat1, tHat2, error, out, depth = 0) {
 }
 
 /** Indices of the corners of a closed loop: sharp turns over a window of `k` points. */
-function corners(loop, { k = 3, angle = 0.95 } = {}) {
+function loopCorners(loop, { k = CORNER_WINDOW, angle = CORNER_ANGLE } = {}) {
   const n = loop.length;
   if (n < 2 * k + 2) return [];
   const turn = new Float32Array(n);
@@ -696,9 +696,9 @@ const tangentAt = (pts, i, dir, k = 3) => {
 };
 
 /** A closed loop as cubic Beziers: split at its corners, smooth elsewhere. */
-export function fitLoop(loop, error) {
+export function fitLoop(loop, error, corner = CORNER) {
   const n = loop.length;
-  const cs = corners(loop);
+  const cs = loopCorners(loop, corner);
   const runs = [];
   if (!cs.length) {
     // no corner: split in two, joined with matching tangents so the curve stays smooth
@@ -740,7 +740,7 @@ export function fitLoop(loop, error) {
  * happen to point at each other; here the window stays inside the line and the two ends
  * are never corners, because a corner is where one curve stops and the next begins.
  */
-function openCorners(pts, { k = 3, angle = 0.95 } = {}) {
+function openCorners(pts, { k = CORNER_WINDOW, angle = CORNER_ANGLE } = {}) {
   const n = pts.length;
   if (n < 2 * k + 2) return [];
   const turn = new Float32Array(n);
@@ -761,6 +761,118 @@ function openCorners(pts, { k = 3, angle = 0.95 } = {}) {
     if (peak && (!out.length || i - out[out.length - 1] > k)) out.push(i);
   }
   return out;
+}
+
+const luma = (d, p) => 0.299 * d[p] + 0.587 * d[p + 1] + 0.114 * d[p + 2];
+
+/**
+ * Otsu's threshold: the luminance that splits the art into dark and light with the least
+ * variance inside each side. Picked from the art rather than fixed at the middle of the
+ * range, because a mark is rarely balanced around it; a pale logo thresholded at 128
+ * comes out blank, and this is the published way to avoid guessing.
+ */
+export function otsuThreshold(image, { alphaMin = 128 } = {}) {
+  const hist = new Float64Array(256);
+  let n = 0;
+  for (let i = 0; i < image.width * image.height; i++) {
+    if (image.data[i * 4 + 3] < alphaMin) continue;
+    hist[Math.round(luma(image.data, i * 4))]++;
+    n++;
+  }
+  if (!n) return 128;
+  let sum = 0;
+  for (let v = 0; v < 256; v++) sum += v * hist[v];
+  let backSum = 0;
+  let back = 0;
+  let best = 128;
+  let bestVar = -1;
+  for (let t = 0; t < 256; t++) {
+    back += hist[t];
+    if (!back) continue;
+    const fore = n - back;
+    if (!fore) break;
+    backSum += t * hist[t];
+    const between = (back * fore * (backSum / back - (sum - backSum) / fore) ** 2) / (n * n);
+    if (between > bestVar) {
+      bestVar = between;
+      best = t;
+    }
+  }
+  // Otsu names the top of the dark class, which on flat art is the ink's own luminance.
+  // Cutting there puts the ink halfway up the soft edge and the whole mark came out at
+  // half coverage. The cut belongs in the gap, so it is moved to the middle of the empty
+  // run it sits in; where the art is continuous there is no gap and nothing moves.
+  let hi = best;
+  while (hi > 0 && !hist[hi]) hi--;
+  let lo = best + 1;
+  while (lo < 256 && !hist[lo]) lo++;
+  return lo < 256 ? Math.round((hi + lo) / 2) : best;
+}
+
+/**
+ * One colour, or a few levels of one: the art cut at a luminance rather than sorted into
+ * the colours it happens to have. Each level is traced from a field that crosses a half
+ * between light and dark, so the contour lands between pixels the way a colour layer's
+ * does, instead of following the pixel grid.
+ *
+ * Levels nest, each inside the one before, and are returned light to dark so the darkest
+ * is drawn last. Each takes the average colour of the pixels it covers, so a mark cut
+ * this way still looks like itself and can still be snapped to the brief.
+ */
+export function monoLevels(image, { levels = 1, threshold = null, alphaMin = 128, soft = 8 } = {}) {
+  const { width: w, height: h } = image;
+  const base = threshold ?? otsuThreshold(image, { alphaMin });
+  // The outermost level is all the ink; the rest split it so each band holds about the
+  // same number of pixels. Spreading the cuts evenly from the threshold down to black was
+  // tried first and wastes most of them: a mark's ink occupies a narrow strip of the
+  // range, so the lower cuts landed in empty space and eight levels gave three.
+  let cuts = [base];
+  if (levels > 1) {
+    const hist = new Float64Array(256);
+    let ink = 0;
+    for (let i = 0; i < image.width * image.height; i++) {
+      if (image.data[i * 4 + 3] < alphaMin) continue;
+      const l = Math.round(luma(image.data, i * 4));
+      if (l > base) continue;
+      hist[l]++;
+      ink++;
+    }
+    for (let step = 1; step < levels && ink; step++) {
+      const want = (ink * (levels - step)) / levels;
+      let seen = 0;
+      let at = 0;
+      for (let v = 0; v <= base; v++) {
+        seen += hist[v];
+        at = v;
+        if (seen >= want) break;
+      }
+      if (at < cuts[cuts.length - 1]) cuts.push(at);
+    }
+  }
+  return cuts.map((cut) => {
+    const field = new Float32Array(w * h);
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    let n = 0;
+    for (let i = 0; i < w * h; i++) {
+      const p = i * 4;
+      const a = image.data[p + 3] / 255;
+      if (a <= 0) continue;
+      // Otsu's dark class is everything up to and including the threshold, so a pixel
+      // sitting exactly on it is ink. Testing strictly below it threw away a whole mark
+      // whose only colour happened to land on the number Otsu chose.
+      const ink = Math.min(1, Math.max(0, (cut + 0.5 + soft - luma(image.data, p)) / (2 * soft)));
+      field[i] = a * ink;
+      if (field[i] >= 0.5) {
+        r += image.data[p];
+        g += image.data[p + 1];
+        b += image.data[p + 2];
+        n++;
+      }
+    }
+    return { cut, field, rgb: n ? [Math.round(r / n), Math.round(g / n), Math.round(b / n)] : [0, 0, 0], pixels: n };
+  });
 }
 
 /** A scalar field sampled between its pixels, clamped at the edges. */
@@ -870,14 +982,14 @@ function extendEnds(points, field, w, h, limit, freeStart, freeEnd) {
 }
 
 /** A centre line as cubic Beziers: split at its corners, smooth elsewhere. */
-export function fitPolyline(points, error, closed = false) {
+export function fitPolyline(points, error, closed = false, corner = CORNER) {
   if (closed) {
     const n = points.length;
     const loop = n > 2 && points[0][0] === points[n - 1][0] && points[0][1] === points[n - 1][1] ? points.slice(0, -1) : points;
-    return loop.length >= 3 ? fitLoop(loop, error) : [];
+    return loop.length >= 3 ? fitLoop(loop, error, corner) : [];
   }
   if (points.length < 2) return [];
-  const cuts = [0, ...openCorners(points), points.length - 1];
+  const cuts = [0, ...openCorners(points, corner), points.length - 1];
   const out = [];
   for (let c = 0; c + 1 < cuts.length; c++) {
     const run = points.slice(cuts[c], cuts[c + 1] + 1);
@@ -1166,6 +1278,24 @@ export function renderLayers(layers, width, height, { crisp = false } = {}) {
 
 const DETAIL = { low: 1.6, normal: 0.8, high: 0.4 };
 
+/**
+ * How sharp a turn has to be before it counts as a corner rather than part of a curve,
+ * in radians. The dial runs the other way round, because "keep more corners" is the
+ * thing anyone actually wants: 0 keeps only the sharpest, 100 keeps nearly every bend,
+ * and the default of 45 is the angle the tracer has always used.
+ */
+const CORNER_ANGLE = 0.95;
+const CORNER_WINDOW = 3;
+const CORNER = { angle: CORNER_ANGLE, k: CORNER_WINDOW };
+// Illustrator offers a Corners dial here and onmodel deliberately does not. It was built
+// and measured first: on a rectangle, a five-pointed star and a twelve-tooth cog the
+// output stopped changing at the default and above, because a corner must also be the
+// sharpest turn in its window and a certain distance from the last one, and past a point
+// there are simply no more corners to find. All the dial could do was find fewer, which
+// makes the trace round off real corners and grow, since the fitter then subdivides the
+// run to hold its error. That trade is what --detail already does, and more honestly.
+
+
 /** A crop of an RGBA image. */
 function cropImage(image, x0, y0, w, h) {
   const data = new Uint8Array(w * h * 4);
@@ -1319,7 +1449,16 @@ function banding(source, render, alphaMin, step = 7) {
  * art is not flat, otherwise the layers, the SVG and Android texts, the render and
  * the facts.
  */
-export function vectorize(image, { palette = [], names = new Map(), detail = "normal", maxColours = 12, flatTarget = 4, minInterior = 0.6, tokenPrefix = "brand", title = "mark", pixel = null, stroke = 0, tone = 0 } = {}) {
+export function vectorize(image, { palette = [], names = new Map(), detail = "normal", maxColours = 12, flatTarget = 4, minInterior = 0.6, tokenPrefix = "brand", title = "mark", pixel = null, stroke = 0, tone = 0, maxPixels = 16e6, noise = null, mono = null } = {}) {
+  if (image.width * image.height > maxPixels) {
+    // Tracing walks every pixel once per colour, twice more to grow and blur it, and
+    // again to follow its contour, so what a decoder shrugs at this does not. Saying so
+    // with the numbers beats looking like a hang.
+    return {
+      refused: `this image is ${image.width}x${image.height}, ${Math.round((image.width * image.height) / 1e6)} megapixels, and the most that is traced is ${Math.round(maxPixels / 1e6)}; tracing works from the shapes, not the detail, so scale it down and trace that`,
+      facts: { width: image.width, height: image.height, maxPixels },
+    };
+  }
   const box = bounds(image, 1);
   if (!box) return { refused: "the image is empty: nothing in it is visible" };
   // Room for a stroke to stand in. A mark trimmed tight has its outermost line against
@@ -1334,7 +1473,33 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
   const w = (loose ? box.x1 + pad + 1 : Math.min(image.width, box.x1 + pad + 1)) - x0;
   const h = (loose ? box.y1 + pad + 1 : Math.min(image.height, box.y1 + pad + 1)) - y0;
   const src = cropImage(image, x0, y0, w, h);
-  const exact = pixel ?? isPixelArt(src);
+  // One colour, or a few levels of one. Rather than a path of its own, the art is first
+  // repainted into those levels and then traced like any flat mark, which is exactly what
+  // it now is: the stacking, the brand snapping, the measuring and the verdict all apply
+  // without knowing it was ever shaded. Only the outermost level's coverage is kept as
+  // alpha, so the edge of the mark stays between pixels instead of landing on the grid.
+  const monoOn = mono != null && mono !== false;
+  let monoLevelCount = 0;
+  let monoCuts = [];
+  if (monoOn) {
+    monoLevelCount = Math.max(1, Math.min(16, Math.round(tone || 0) || 1));
+    const built = monoLevels(src, { levels: monoLevelCount, threshold: typeof mono === "number" ? mono : null });
+    monoCuts = built.map((b) => b.cut);
+    for (let i = 0; i < w * h; i++) {
+      let level = -1;
+      for (let L = 0; L < built.length; L++) if (built[L].field[i] >= 0.5) level = L;
+      const p = i * 4;
+      if (level < 0) {
+        src.data[p + 3] = 0;
+        continue;
+      }
+      src.data[p] = built[level].rgb[0];
+      src.data[p + 1] = built[level].rgb[1];
+      src.data[p + 2] = built[level].rgb[2];
+      src.data[p + 3] = Math.round(255 * Math.min(1, Math.max(0, built[0].field[i])));
+    }
+  }
+  const exact = monoOn ? false : (pixel ?? isPixelArt(src));
   // pixel art has no soft edge: a partly transparent pixel is in (from half) or out
   let hardened = 0;
   if (exact) {
@@ -1351,7 +1516,7 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
   // Sampling every pixel rather than the interior was tried and is no better: a smooth
   // gradient moves slowly enough that its pixels agree with their neighbours anyway, and
   // on art thin enough to have no interior the fallback already reads every pixel.
-  const toneMax = exact ? 0 : Math.max(0, Math.round(tone || 0));
+  const toneMax = exact ? 0 : monoOn ? (monoLevelCount > 1 ? monoLevelCount : 0) : Math.max(0, Math.round(tone || 0));
   const found = exact
     ? exactColours(src)
     : toneMax > 0
@@ -1384,7 +1549,7 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
     // Full tone leaves far more specks behind, since neighbouring tones are a hair apart
     // and every bit of noise lands in whichever band it happens to fall; a bigger floor
     // keeps the trace from turning into thousands of one-pixel shapes.
-    const minArea = toneMax ? Math.max(12, Math.round(found.opaque * 0.0003)) : Math.max(6, Math.round(found.opaque * 0.00005));
+    const minArea = noise != null ? Math.max(1, Math.round(noise)) : toneMax ? Math.max(12, Math.round(found.opaque * 0.0003)) : Math.max(6, Math.round(found.opaque * 0.00005));
     labels = cleanLabels(Int16Array.from(labels), w, h, finals.length, { minArea });
   }
   const order = exact ? [...finals.keys()] : layerOrder(labels, w, h, finals.length);
@@ -1427,7 +1592,7 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
     const silhouette = new Float32Array(w * h);
     for (let i = 0; i < w * h; i++) silhouette[i] = src.data[i * 4 + 3] / 255;
     const soft = blur(silhouette, w, h, 0.6);
-    const minLoop = Math.max(4, found.opaque * 0.00003);
+    const minLoop = noise != null ? Math.max(1, noise) : Math.max(4, found.opaque * 0.00003);
     // The interior: opaque pixels at least two pixels from any transparent one.
     let interior = new Uint8Array(w * h);
     for (let i = 0; i < w * h; i++) interior[i] = labels[i] >= 0 ? 1 : 0;
@@ -1530,7 +1695,7 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
     silhouettePath = polysToPath(pixelLoops(mask, w, h, 0), 0, 0);
   } else {
     const soft = blur(Float32Array.from({ length: w * h }, (_, i) => src.data[i * 4 + 3] / 255), w, h, 0.6);
-    const minLoop = Math.max(4, found.opaque * 0.00003);
+    const minLoop = noise != null ? Math.max(1, noise) : Math.max(4, found.opaque * 0.00003);
     silhouettePath = curvesToPath(contours(soft, w, h, 0.5).filter((l) => Math.abs(polygonArea(l)) >= minLoop).map((l) => fitLoop(l, tolerance)), 0, 0);
   }
   const render = renderLayers(layers, w, h, { crisp: exact });
@@ -1539,7 +1704,9 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
   // edge costs a solid mark almost nothing and a hairline a fifth of itself, so the bar
   // set for a blob calls every trace of a 2.4 px line poor however exact it is. Where
   // centre lines were used the width is known, so the bar is set against what that width
-  // allows; the raw figure is still reported beside it.
+  // allows; the raw figure is still reported beside it. It applies to the share that kept
+  // its colour as well, which counts a pixel against the trace when the render is not
+  // solid there at all, so on a hairline it carries the same penalty twice over.
   // Where centre lines were used the width is measured; otherwise it is read off how much
   // of the art has four opaque neighbours, since a line W pixels wide has about (W-2)/W of
   // itself in that state. Either way the bar moves with the art and not with how it was
@@ -1564,9 +1731,9 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
     ? fid.silhouette >= 0.999 && fid.colourKept >= 0.999
       ? "exact"
       : "approximate"
-    : fid.silhouette >= 0.97 * ceiling && fid.colourKept >= 0.93 && !banded
+    : fid.silhouette >= 0.97 * ceiling && fid.colourKept >= 0.93 * ceiling && !banded
       ? "good"
-      : fid.silhouette >= 0.93 * ceiling && fid.colourKept >= 0.85
+      : fid.silhouette >= 0.93 * ceiling && fid.colourKept >= 0.85 * ceiling
         ? "approximate"
         : "poor";
   const token = (name) => `${tokenPrefix}-${name}`;
@@ -1589,6 +1756,7 @@ export function vectorize(image, { palette = [], names = new Map(), detail = "no
     ...(hairline > 0 && ceiling < 1 ? { hairline: Math.round(hairline * 100) / 100, silhouetteCeiling: Math.round(ceiling * 1000) / 1000 } : {}),
     // Full tone is the one mode that can honestly lose to the PNG it came from, so it is
     // weighed against one: the same pixels, encoded, for a figure rather than a feeling.
+    ...(monoOn ? { mono: monoLevelCount, cuts: monoCuts } : {}),
     ...(fid.banding ? { banding: fid.banding } : {}),
     ...(toneMax ? { tone: toneMax, vsPNG: Math.round((Buffer.byteLength(svg) / Math.max(1, encodePNG(src).length)) * 100) / 100 } : {}),
     bytes: Buffer.byteLength(svg),

@@ -226,6 +226,7 @@ onmodel vector --name bag-tag                 # the run's pick, or --candidate 1
 onmodel vector --mark logo.png --detail high  # any PNG with transparency
 onmodel vector --mark sketch.png --stroke 6   # line work, traced down the middle
 onmodel vector --mark shaded.png --tone 16    # shaded art, in as many tones as it needs
+onmodel vector --mark logo.png --mono         # one colour, cut at a luminance read off the art
 ```
 
 The image models only paint pixels, so a vector comes from tracing after the painting,
@@ -247,6 +248,13 @@ and the tool is honest about what traces:
   refused. Smooth shading becomes nested bands of flat colour, which is what a vector
   can hold; a lit sphere comes out in 14 tones at 0.6x the size of the same pixels as a
   PNG, with 99.5% of pixels within a hair of their old colour.
+- **One colour**, with `--mono`, cuts the art at a luminance instead of sorting it into
+  the colours it has: anything darker is ink, anything lighter is the page. The cut is
+  chosen from the art by Otsu's method rather than fixed at the middle of the range, since
+  a pale mark cut at the middle comes out blank; `--threshold <0-255>` sets it by hand,
+  and `--tone <n>` gives n nested levels of it, each holding about the same amount of
+  ink. The one colour is the average of the ink, so it still snaps to the brief and still
+  comes out as a named variable.
 - **Painted or textured art** is still refused without `--tone`, because tracing it
   would give thousands of shapes and a worse file than the PNG. With `--tone` it will be
   attempted and then weighed against a PNG of the same pixels, which is the honest
@@ -266,6 +274,18 @@ colour while the eye sees rings, so the share of the art where the trace put a s
 the source does not have is reported, and a trace that bands is never called good.
 `vector.html` shows the source, the SVG as the browser draws it, onmodel's own drawing
 and a map of where they differ. A refusal or a poor match exits with code 2.
+
+An image larger than 16 megapixels is turned down with its size rather than left to look
+like a hang, since tracing walks every pixel once per colour and again to follow each
+contour; a file over 64 megapixels is turned down before it is decoded at all, from its
+header, because a decoded pixel is four bytes.
+
+Illustrator offers a Corners dial here and onmodel deliberately does not. It was built
+and measured first, on a rectangle, a five-pointed star and a twelve-tooth cog: the output
+stopped changing at the default and above, because a corner must also be the sharpest turn
+in its window and a certain distance from the last one, so past a point there are no more
+corners to find. All the dial could do was find fewer, which rounds off real corners and
+makes the file bigger, and that trade is what `--detail` already does.
 
 On the live runs the Pay in Style bag tag traced into 5 brand colours in 15.5 KB, the
 2K store hero into 6 colours in 42 KB, and the Chomp sprite exactly in 2.4 KB. It calls
@@ -472,7 +492,7 @@ their recorded size. Any failure exits with code 2, naming the file and the rule
 | `models [--filter banana]` | the models the key can use, which make images, and the price of each |
 | `generate --subject "..."` | paint a subject from the brief: candidates, keyed, measured, sized, judged |
 | `icons --name x` or `--mark file.png` | every icon Android, iOS, the web and Expo ask for, checked against the rulebook, with mask previews and vector icons when the mark traces (free) |
-| `vector --name x` or `--mark file.png` | trace a flat or pixel-art mark into an SVG with brand-named fills and an Android vector drawable, drawn back and measured; `--stroke N` traces line work as centre lines, `--tone N` traces shaded art in N tones (free) |
+| `vector --name x` or `--mark file.png` | trace a flat or pixel-art mark into an SVG with brand-named fills and an Android vector drawable, drawn back and measured; `--stroke N` traces line work as centre lines, `--tone N` traces shaded art in N tones, `--mono` cuts it to one colour (free) |
 | `store --name x [--subject "..."]` | an on-brand hero painted and judged, then cropped to the Play feature graphic, the Open Graph and the GitHub previews, no alpha |
 | `edit --name x --change "..."` | continue a candidate's conversation with one change; measured against its parent and judged |
 | `sheet --subject "..." --name x` | the model sheet: front, side and back views, sliced and measured |
@@ -490,7 +510,9 @@ auto|#hex|none`, `--size 1K`, `--aspect 1:1`, `--model id`, `--judge id`,
 play-feature,og,github`, `--mark logo.png`, `--count 3`, `--size 2K`, `--budget 2`,
 `--no-judge`. For `vector`: `--candidate 2` or `2e1`, or `--mark file.png`,
 `--detail low|normal|high`, `--stroke N` to trace line work no wider than N pixels as
-stroked centre lines, and `--tone N` to trace shaded art in up to N tones. For `edit`: `--candidate 2` or `2e1` (the pick by default),
+stroked centre lines, `--tone N` to trace shaded art in up to N tones, `--mono` (with
+`--threshold 0-255`) for one colour by luminance, and `--noise N` to ignore shapes
+smaller than N pixels. For `edit`: `--candidate 2` or `2e1` (the pick by default),
 `--change "..."`, `--in dir`, `--sheet`, `--no-judge`. For `check`: `--name x` or `--in dir`,
 else every run under `--out`. For `price`: `--subjects N`, `--sprites "name:frames;..."`,
 `--store`, `--count`, `--size`, `--no-judge`. For every command: `--config`, `--out`,
