@@ -80,11 +80,22 @@ read its facts.
 1. **When to use it.** A logo or brand mark, a flat illustration that should follow the
    theme, art for print, or a sprite wanted as SVG. `onmodel vector --name <run>` (the
    pick, or `--candidate 1e1`) or `--mark <file.png>`. It is free.
+   For line work (an outline drawing, a single-weight icon, anything drawn with a pen
+   rather than filled), add `--stroke <px>` with a little more than the drawing's line
+   weight. Parts no wider than that are traced down their middle and given a stroke
+   width, so the result is a line that can be reweighted, not a loop around one; wider
+   parts stay filled. Read the reported width back: it is measured off the art, and if it
+   is far from the weight you expect, the `--stroke` figure was too large and swallowed
+   something solid.
 2. **Read the verdict.** Exact (pixel art), good, approximate or poor, from the trace
    drawn back and compared with the source. A refusal names why (gradients, shading,
    texture); do not force it: painted art stays a PNG. For approximate, open
-   `vector.html` and look at the red in the difference map before using it.
-3. **Wire it in.** Every fill is `var(--brand-<name>, #hex)`, named from the brief's
+   `vector.html` and look at the red in the difference map before using it. On thin art
+   the silhouette figure is lower than it looks: a quarter-pixel error costs a hairline a
+   fifth of itself, so the verdict is set against what that line weight allows and the
+   report says what that was. Judge a drawing by the difference map, not the number.
+3. **Wire it in.** Every fill is `var(--brand-<name>, #hex)`, and a centre line strokes
+   in the same variable, named from the brief's
    palette: inline the SVG and set those variables in the page's tokens (or rename
    them to the project's own tokens) to make it follow light and dark mode. On Android,
    copy the drawable and its colour resources, and add a `values-night` copy of the

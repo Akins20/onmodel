@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+- Centre lines (`onmodel vector --stroke <px>`): line work traced down the middle as
+  stroked lines instead of around both sides as filled outlines. A pen stroke traced as
+  an outline is a long thin loop with twice the points, and it stops being a line that
+  can be reweighted or restyled. Parts of a colour no wider than the number given become
+  open or closed paths with a stroke width, in the SVG and in the Android drawable, and
+  leave the fill; anything wider stays a filled shape, so a mark that is part drawing and
+  part solid comes out as both. Chamfer distance transform, Zhang-Suen thinning and a
+  skeleton graph find the lines; the width is then read off the soft edge of the art, to
+  a fraction of a pixel (2.42 for a 2.40 px line, 6.08 for 6.00), which a distance
+  transform cannot do because it cannot tell a 2 px line from a 1 px one.
+- Line art is no longer refused as painted. Flatness was the share of all the ink with
+  four opaque neighbours, and a two-pixel line has almost none, so a pure black line
+  measured as textured. That one share was answering two questions, and is now two: how
+  flat the part that can be judged is, and how much of the art is too thin to judge.
+- A hairline is no longer marked as though it were a blob. A quarter-pixel error along an
+  edge costs a solid mark almost nothing and a 2.4 px line a fifth of itself, so every
+  trace of line work came out poor however exact it was. The verdict is set against what
+  the art's own line weight allows, measured where centre lines were used and estimated
+  from the art otherwise so the two stay comparable, and the raw figure is reported
+  beside it.
+- Three traps in the skeleton, each of which quietly lost part of a drawing: branches
+  counted by neighbours made every staircase corner a junction and broke a plain
+  rectangle outline into eight pieces, where the crossing number keeps it one ring; a
+  walk that preferred no particular step hopped around a junction on a diagonal and
+  reported a four-way crossing as one long line; and a walk keyed by direction rather
+  than by the pixels it claimed left 55 skeleton pixels in no run at all, so a whole arc
+  of a ring went untraced. Verified in Chromium: 98.9% of pixels within 24 levels of
+  onmodel's own render.
+
 ## 0.2.0 (2026-10-12)
 
 - Vector output (`onmodel vector`): the image models only paint pixels, so a mark is
