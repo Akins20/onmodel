@@ -40,6 +40,13 @@ function edgeDiff(image, aIndex, bIndex, vertical) {
  * above that. The grain is taken as the median of the interior steps, not the mean, so
  * one strong edge inside the tile does not excuse a bad join.
  */
+/** The share of the image that is not fully opaque. A floor has none. */
+export function transparency(image) {
+  let soft = 0;
+  for (let i = 0; i < image.width * image.height; i++) if (image.data[i * 4 + 3] < 255) soft++;
+  return Math.round((soft / Math.max(1, image.width * image.height)) * 1000) / 1000;
+}
+
 export function seam(image) {
   const { width: w, height: h } = image;
   if (w < 4 || h < 4) return { x: 0, y: 0, grainX: 0, grainY: 0, ratioX: 1, ratioY: 1, ratio: 1 };

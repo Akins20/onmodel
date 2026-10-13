@@ -69,6 +69,12 @@ export const DEFAULTS = {
     // on from the last frame of the one before; maxFrames caps an action's length.
     stripFrames: 8,
     maxFrames: 24,
+    // A normal map of the whole sheet, so a 2D light knows which way each pixel of the
+    // character faces. Free and derived; the Godot resource carries it with the art.
+    normal: false,
+    normalStrength: 1,
+    // Where the atlas will live in the Godot project, for the paths inside the .tres.
+    resPath: null,
   },
   // Refuse to start a call that would carry a run past this many dollars.
   budgetUSD: 2,
@@ -146,6 +152,9 @@ function validateSprite(sp) {
   if (!(Number.isInteger(sp.retries) && sp.retries >= 0 && sp.retries <= 5)) throw new Error("sprite.retries must be from 0 to 5");
   if (!(Number.isInteger(sp.frameRetries) && sp.frameRetries >= 0 && sp.frameRetries <= 3)) throw new Error("sprite.frameRetries must be from 0 to 3");
   if (!(Number.isInteger(sp.judgeRepairs) && sp.judgeRepairs >= 0 && sp.judgeRepairs <= 2)) throw new Error("sprite.judgeRepairs must be from 0 to 2");
+  if (typeof sp.normal !== "boolean") throw new Error("sprite.normal must be true or false");
+  if (!(typeof sp.normalStrength === "number" && sp.normalStrength > 0 && sp.normalStrength <= 10)) throw new Error("sprite.normalStrength must be from 0 to 10");
+  if (sp.resPath != null && !/^res:\/\//.test(String(sp.resPath))) throw new Error('sprite.resPath must start with res:// , such as "res://art/sprites"');
   const checkThresholds = (t, where) => {
     if (!isObject(t)) throw new Error(`${where} must be an object`);
     for (const [k, v] of Object.entries(t)) {

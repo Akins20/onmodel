@@ -1,4 +1,5 @@
 import { blit } from "./key.mjs";
+import { packedVector2 } from "./silhouette.mjs";
 
 /**
  * The atlas: one action per row, every frame the same size, so a CSS steps()
@@ -154,11 +155,26 @@ static inline int ${prefix.toLowerCase()}_frame_at(const ${Type}Action *a, float
  * Godot gives its sub-resources random ids. These are numbered instead, so the same
  * sprites produce the same file and a diff shows what actually changed.
  */
-export function atlasGodot(atlas, { file = "atlas.png", resPath = null } = {}) {
+export function atlasGodot(atlas, { file = "atlas.png", resPath = null, normal = null, filter = null } = {}) {
   const texture = resPath ?? `res://${file}`;
-  const lines = [`[gd_resource type="SpriteFrames" format=3]`, "", `[ext_resource type="Texture2D" path="${texture}" id="1_atlas"]`, ""];
+  const lines = [`[gd_resource type="SpriteFrames" format=3]`, "", `[ext_resource type="Texture2D" path="${texture}" id="1_atlas"]`];
+  // An AtlasTexture may take a CanvasTexture as its atlas, which Godot 4.7.2 confirmed by
+  // saving and loading the chain back. That is worth doing: it carries the normal map and
+  // the filtering INSIDE the resource, so a sprite lights correctly and pixel art stays
+  // crisp with nothing to set on the node. Godot 4 has no filter setting in a .import, so
+  // this is the only place it can travel with the art.
+  const wrapped = Boolean(normal || filter != null);
+  if (normal) lines.push(`[ext_resource type="Texture2D" path="${normal}" id="2_normal"]`);
+  lines.push("");
+  if (wrapped) {
+    lines.push(`[sub_resource type="CanvasTexture" id="CanvasTexture_0"]`, `diffuse_texture = ExtResource("1_atlas")`);
+    if (normal) lines.push(`normal_texture = ExtResource("2_normal")`);
+    if (filter != null) lines.push(`texture_filter = ${filter}`);
+    lines.push("");
+  }
+  const source = wrapped ? `SubResource("CanvasTexture_0")` : `ExtResource("1_atlas")`;
   for (const p of atlas.placements) {
-    lines.push(`[sub_resource type="AtlasTexture" id="AtlasTexture_${p.index}"]`, `atlas = ExtResource("1_atlas")`, `region = Rect2(${p.x}, ${p.y}, ${p.width}, ${p.height})`, "");
+    lines.push(`[sub_resource type="AtlasTexture" id="AtlasTexture_${p.index}"]`, `atlas = ${source}`, `region = Rect2(${p.x}, ${p.y}, ${p.width}, ${p.height})`, "");
   }
   const animations = atlas.ranges.map((r) => {
     const frames = [];
@@ -175,17 +191,29 @@ export function atlasGodot(atlas, { file = "atlas.png", resPath = null } = {}) {
  * is declared by the line `<column>:<row>/0 = 0`, and leaving it out leaves the cell
  * empty in the editor however good the pixels are.
  */
-export function atlasTileSet(image, { file = "tiles.png", resPath = null, tileWidth = 32, tileHeight = tileWidth } = {}) {
+export function atlasTileSet(image, { file = "tiles.png", resPath = null, tileWidth = 32, tileHeight = tileWidth, collision = null, occluder = null } = {}) {
   const texture = resPath ?? `res://${file}`;
   const columns = Math.max(1, Math.floor(image.width / tileWidth));
   const rows = Math.max(1, Math.floor(image.height / tileHeight));
+  // A tile's collision points are measured from the CENTRE of the tile, not its corner.
+  // Godot 4.7.2 wrote -16,-16 to 16,16 for a 32 px tile; written from the corner, the body
+  // would sit half a tile down and to the right of the art it belongs to.
+  const centre = { originX: tileWidth / 2, originY: tileHeight / 2 };
+  const head = [`[gd_resource type="TileSet" format=3]`, "", `[ext_resource type="Texture2D" path="${texture}" id="1_atlas"]`, ""];
+  if (occluder) head.push(`[sub_resource type="OccluderPolygon2D" id="OccluderPolygon2D_0"]`, `polygon = ${packedVector2(occluder, centre)}`, "");
   const cells = [];
-  for (let y = 0; y < rows; y++) for (let x = 0; x < columns; x++) cells.push(`${x}:${y}/0 = 0`);
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < columns; x++) {
+      cells.push(`${x}:${y}/0 = 0`);
+      if (occluder) cells.push(`${x}:${y}/0/occlusion_layer_0/polygon_0/polygon = SubResource("OccluderPolygon2D_0")`);
+      if (collision) cells.push(`${x}:${y}/0/physics_layer_0/polygon_0/points = ${packedVector2(collision, centre)}`);
+    }
+  }
+  const layers = [];
+  if (occluder) layers.push("occlusion_layer_0/light_mask = 1");
+  if (collision) layers.push("physics_layer_0/collision_layer = 1");
   return [
-    `[gd_resource type="TileSet" format=3]`,
-    "",
-    `[ext_resource type="Texture2D" path="${texture}" id="1_atlas"]`,
-    "",
+    ...head,
     `[sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_0"]`,
     `texture = ExtResource("1_atlas")`,
     `texture_region_size = Vector2i(${tileWidth}, ${tileHeight})`,
@@ -193,6 +221,7 @@ export function atlasTileSet(image, { file = "tiles.png", resPath = null, tileWi
     "",
     "[resource]",
     `tile_size = Vector2i(${tileWidth}, ${tileHeight})`,
+    ...layers,
     `sources/0 = SubResource("TileSetAtlasSource_0")`,
     "",
   ].join("\n");

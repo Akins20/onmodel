@@ -15,6 +15,7 @@ import { makeText } from "../src/text.mjs";
 import { makeLockup } from "../src/lockup.mjs";
 import { makeTileset } from "../src/tileset.mjs";
 import { makeNormalMap } from "../src/normalmap.mjs";
+import { makeShape } from "../src/shape.mjs";
 import { makeVector } from "../src/vectorize.mjs";
 import { checkRun, findRuns, failuresOf } from "../src/check.mjs";
 
@@ -44,12 +45,16 @@ Commands
   text --string "ACME" --font f.ttf  a wordmark or lettermark set from a real font, not drawn: the letters are
        [--name slug] [--px 128]      the type designer's own outlines, so they cannot come out malformed
        [--tracking 20] [--colour #hex] [--no-kerning]                                  (free)
+  shape --mark art.png or --name run  the collision and occlusion shape traced from the art's own
+        [--points 16]                silhouette, simplified to a budget, with an OccluderPolygon2D and
+                                     the outline drawn over the art to show where it is wrong (free)
   normal --mark art.png or --name run  a normal map derived from the art so a 2D light knows which way each
          [--strength 1] [--blur 1]    pixel faces, with the Godot CanvasTexture and the art lit from four
          [--wrap] [--invert-y]        corners; the height comes from luminance, which is said not hidden (free)
   tile --mark t.png or --name run   check whether a texture really tiles, close the join if it does not,
        [--band 8] [--grid 3]        and write a Godot TileSet; the join is measured against the
        [--no-fix] [--normal]        texture's own grain, so busy and smooth are judged alike;
+       [--collision]                --collision bakes a body and an occluder into the TileSet;
                                     --normal derives a tiling normal map and a CanvasTexture too (free)
   lockup --string "ACME" --font f.ttf  a traced symbol and a set wordmark placed together as one mark
          --mark logo.png or --name run  [--layout beside|above] [--px 128] [--gap 0.5] [--symbol 1.2]
@@ -133,6 +138,8 @@ const OPTIONS = {
   wrap: { type: "boolean" },
   "invert-y": { type: "boolean" },
   normal: { type: "boolean" },
+  points: { type: "string" },
+  collision: { type: "boolean" },
   noise: { type: "string" },
   change: { type: "string" },
   in: { type: "string" },
@@ -311,6 +318,29 @@ async function main() {
       if (f.verdict === "incomplete" || f.verdict === "poor") process.exitCode = 2;
       return;
     }
+    case "shape": {
+      const config = await loadConfig(flags);
+      let points = 16;
+      if (flags.points != null) {
+        points = Number(flags.points);
+        if (!Number.isInteger(points) || points < 3 || points > 256) throw new Error("--points must be a whole number from 3 to 256");
+      }
+      const result = await makeShape({ config, name: flags.name ?? null, candidate: flags.candidate ?? null, markPath: flags.mark ?? null, points });
+      const f = result.facts;
+      const lines = [
+        `${result.name} shape in ${result.dir}: ${f.verdict} (${f.shapes} shape${f.shapes === 1 ? "" : "s"}, ${f.points} points from ${f.from})`,
+        `it covers ${Math.round(f.covers * 100)}% of the art, misses ${Math.round(f.missed * 100)}%, and claims ${Math.round(f.extra * 100)}% that is empty`,
+        f.verdict === "baggy"
+          ? "it bulges into empty space, which makes things collide with nothing: raise --points"
+          : f.verdict === "tight"
+            ? "it cuts inside the art, which lets things pass through the sprite: raise --points"
+            : "close enough to the art to use as a body",
+        `look at ${path.basename(result.files.preview)}: the outline drawn over the art, which shows WHERE it is wrong`,
+      ];
+      emit(config, lines.join("\n"), { command: "shape", ...result });
+      if (f.verdict !== "good") process.exitCode = 2;
+      return;
+    }
     case "normal": {
       const config = await loadConfig(flags);
       const num = (v, what, lo, hi) => {
@@ -361,6 +391,7 @@ async function main() {
         grid: num(flags.grid, "grid", 2, 8) ?? 3,
         fix: !flags["no-fix"],
         normal: Boolean(flags.normal),
+        collision: Boolean(flags.collision),
         strength: num(flags.strength, "strength", 0.05, 10) ?? 1,
         blur: num(flags.blur, "blur", 0, 32) ?? 1,
       });
@@ -374,7 +405,9 @@ async function main() {
       const lines = [
         `${result.name} tile in ${result.dir}: ${f.verdict} (${f.width}x${f.height})`,
         said,
+        ...(f.transparent > 0.02 ? [`${Math.round(f.transparent * 100)}% of this is see-through, so it is a decal rather than a floor; the join is measured on colour alone and a hole in the art is not a seam`] : []),
         ...(f.normal ? [`a normal map was derived too, joining at ${f.normal.join}x the grain, with a Godot CanvasTexture binding it to the colour`] : []),
+        ...(f.collision ? [`a collision body of ${f.collision.points} points is in the TileSet, on a physics and an occlusion layer, fitting the tile to ${f.collision.fit}`] : []),
         `look at ${path.basename(result.files.tiled)}: the tile laid ${f.grid} by ${f.grid}, which is the only way to really see it`,
       ];
       emit(config, lines.join("\n"), { command: "tile", ...result });
@@ -431,6 +464,8 @@ async function main() {
     }
     case "sprites": {
       const config = await loadConfig(flags);
+      // --normal turns the sheet's lighting on for this run without editing the config.
+      if (flags.normal) config.sprite = { ...config.sprite, normal: true };
       const result = await makeSprites({ config, name: flags.name, subject: flags.subject ?? null, judge: !flags["no-judge"], useSheet: !flags["no-sheet"], sheetPick: flags.pick ?? null });
       const lines = result.actions.map((a) =>
         a.error

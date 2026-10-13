@@ -235,3 +235,29 @@ test("the Godot resource is the shape Godot itself writes, and Godot reads it ba
   // The texture can point anywhere in the project, since onmodel does not know its layout.
   assert.match(atlasGodot(atlas, { file: "player.png", resPath: "res://art/sprites/player.png" }), /path="res:\/\/art\/sprites\/player\.png"/);
 });
+
+test("a SpriteFrames can carry its own lighting and filtering", () => {
+  // An AtlasTexture may take a CanvasTexture as its atlas, which Godot 4.7.2 confirmed by
+  // loading this chain back and reporting the diffuse, the normal and the filter. It
+  // matters because Godot 4 has no filter setting in a .import file, so this is the only
+  // place crisp pixel art can travel with the art rather than being set on every node.
+  const atlas = packActions([{ name: "idle", fps: 8, loop: true, frames: [canvas(8, 8, [[0, 0, 8, 8, RED]]), canvas(8, 8, [[0, 0, 8, 8, BLUE]])] }]);
+
+  const plain = atlasGodot(atlas, { file: "p.png" });
+  assert.ok(!/CanvasTexture/.test(plain), "no normal map and no filter, no wrapper");
+  assert.match(plain, /atlas = ExtResource\("1_atlas"\)/);
+
+  const lit = atlasGodot(atlas, { file: "p.png", normal: "res://p.normal.png", filter: 1 });
+  assert.match(lit, /\[ext_resource type="Texture2D" path="res:\/\/p\.normal\.png" id="2_normal"\]/);
+  assert.match(lit, /\[sub_resource type="CanvasTexture" id="CanvasTexture_0"\]/);
+  assert.match(lit, /normal_texture = ExtResource\("2_normal"\)/);
+  assert.match(lit, /texture_filter = 1/);
+  // Every frame now reads through the CanvasTexture, not the raw PNG.
+  assert.ok(!/atlas = ExtResource/.test(lit), "frames point at the wrapper");
+  assert.equal((lit.match(/atlas = SubResource\("CanvasTexture_0"\)/g) ?? []).length, 2);
+
+  // Filtering alone is reason enough to wrap, with no normal map in sight.
+  const crisp = atlasGodot(atlas, { file: "p.png", filter: 1 });
+  assert.match(crisp, /\[sub_resource type="CanvasTexture"/);
+  assert.ok(!/normal_texture/.test(crisp));
+});

@@ -8,7 +8,8 @@ import { chooseKey, keyOut, quantize, hardenAlpha, fillBackground, blit, resize,
 import { toHex } from "./color.mjs";
 import { sliceStrip, placeFrames, mirror } from "./strip.mjs";
 import { measureAction, paletteDelta, normalisePair, iou, silhouette, HARD_FLAGS } from "./measure.mjs";
-import { packActions, atlasJSON, atlasCSS, atlasHeader, atlasGodot } from "./atlas.mjs";
+import { packActions, atlasJSON, atlasCSS, atlasHeader, atlasGodot, GODOT_FILTER_NEAREST } from "./atlas.mjs";
+import { normalMap } from "./normal.mjs";
 import { encodeAPNG, encodeGIF } from "./anim.mjs";
 import { generate, preambleParts, slug } from "./generate.mjs";
 import { spriteImageCounts } from "./plan.mjs";
@@ -669,6 +670,7 @@ export async function makeSprites({ config, name, subject = null, judge = true, 
       css: path.join(dir, `${label}.css`),
       header: path.join(dir, `${label}.h`),
       godot: path.join(dir, `${label}.tres`),
+      ...(config.sprite?.normal ? { normal: path.join(dir, `${label}.normal.png`) } : {}),
       width: sheetImage.image.width,
       height: sheetImage.image.height,
       frame: sheetImage.frame,
@@ -678,7 +680,22 @@ export async function makeSprites({ config, name, subject = null, judge = true, 
     await writeFile(atlas.json, JSON.stringify(atlasJSON(sheetImage, { file: `${label}.png`, version: await toolVersion() }), null, 2));
     await writeFile(atlas.css, atlasCSS(sheetImage, { file: `${label}.png`, prefix: label, pixelated: Boolean(config.pixel) }));
     await writeFile(atlas.header, atlasHeader(sheetImage, { file: `${label}.png`, prefix, guard: `${prefix}_ATLAS_H` }));
-    await writeFile(atlas.godot, atlasGodot(sheetImage, { file: `${label}.png`, resPath: config.sprite?.resPath ? `${String(config.sprite.resPath).replace(/\/+$/, "")}/${label}.png` : null }));
+    const res = (n) => (config.sprite?.resPath ? `${String(config.sprite.resPath).replace(/\/+$/, "")}/${n}` : `res://${n}`);
+    if (config.sprite?.normal) {
+      // The whole sheet at once, so every frame's lighting agrees with its neighbours.
+      const lit = normalMap(sheetImage.image, { strength: config.sprite.normalStrength ?? 1, blur: config.pixel ? 0 : 1 });
+      await writeFile(atlas.normal, encodePNG(lit.image));
+      atlas.normalFacts = lit.facts;
+    }
+    await writeFile(
+      atlas.godot,
+      atlasGodot(sheetImage, {
+        file: `${label}.png`,
+        resPath: res(`${label}.png`),
+        normal: config.sprite?.normal ? res(`${label}.normal.png`) : null,
+        filter: config.pixel ? GODOT_FILTER_NEAREST : null,
+      }),
+    );
   }
 
   const imageSummary = client.summary();

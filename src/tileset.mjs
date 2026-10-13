@@ -3,9 +3,10 @@ import path from "node:path";
 import { encodePNG } from "./png.mjs";
 import { slug } from "./generate.mjs";
 import { loadMark } from "./icons.mjs";
-import { seam, makeSeamless, tiled } from "./tile.mjs";
+import { seam, makeSeamless, tiled, transparency } from "./tile.mjs";
 import { atlasTileSet, atlasCanvasTexture, GODOT_FILTER_NEAREST, GODOT_REPEAT_ENABLED } from "./atlas.mjs";
 import { normalMap, lightingStrip } from "./normal.mjs";
+import { silhouettePolygons, shapeFit } from "./silhouette.mjs";
 
 /**
  * `onmodel tile`: a texture checked for whether it actually tiles, closed up if it does
@@ -26,13 +27,14 @@ import { normalMap, lightingStrip } from "./normal.mjs";
 const FIX_ABOVE = 1.5;
 const FORCED_ABOVE = 8;
 
-export async function makeTileset({ config, name = null, candidate = null, markPath = null, band = null, grid = 3, fix = true, normal = false, strength = 1, blur = 1, log = (s) => process.stderr.write(s) }) {
+export async function makeTileset({ config, name = null, candidate = null, markPath = null, band = null, grid = 3, fix = true, normal = false, collision = false, strength = 1, blur = 1, log = (s) => process.stderr.write(s) }) {
   const { mark, file } = await loadMark({ config, name, candidate, markPath });
   const label = slug(name ?? path.basename(file).replace(/\.[^.]+$/, ""));
   const dir = path.join(config.out, label, "tile");
   await mkdir(dir, { recursive: true });
 
   const before = seam(mark);
+  const soft = transparency(mark);
   const needed = before.ratio > FIX_ABOVE;
   const applied = fix && needed;
   const result = applied ? makeSeamless(mark, { band }) : { image: mark, band: { x: 0, y: 0 }, moved: 0, mean: 0 };
@@ -49,6 +51,13 @@ export async function makeTileset({ config, name = null, candidate = null, markP
   await writeFile(files.tile, encodePNG(result.image));
   await writeFile(files.tiled, encodePNG(tiled(result.image, grid)));
   await writeFile(files.source, encodePNG(mark));
+  // The tile's own shape as a body. A solid tile gives the square, which is right and
+  // trivial; a tile with holes or a sloped edge gives the shape that is actually there.
+  let body = null;
+  if (collision) {
+    const polys = silhouettePolygons(result.image, { maxPoints: 16 });
+    if (polys.length) body = { points: polys[0].points, ...shapeFit(result.image, [polys[0]]) };
+  }
   await writeFile(
     files.tileset,
     atlasTileSet(result.image, {
@@ -56,6 +65,8 @@ export async function makeTileset({ config, name = null, candidate = null, markP
       resPath: config.tile?.resPath ? `${String(config.tile.resPath).replace(/\/+$/, "")}/${label}.png` : null,
       tileWidth: result.image.width,
       tileHeight: result.image.height,
+      collision: body?.points ?? null,
+      occluder: body?.points ?? null,
     }),
   );
 
@@ -89,13 +100,19 @@ export async function makeTileset({ config, name = null, candidate = null, markP
     join: { x: before.x, y: before.y },
     grain: { x: before.grainX, y: before.grainY },
     ratioBefore: before.ratio,
-    ratioAfter: after.ratio,
+    // Named for what it is. After the fix the two edges are identical BY CONSTRUCTION, so
+    // this always comes back at 1 and is a self-check that the fix did what it says, not
+    // evidence that the texture was ever going to tile. The evidence is `mean`, below:
+    // how far the pixels had to move to get here.
+    ratioAfterByConstruction: after.ratio,
+    transparent: soft,
     fixed: applied,
     band: result.band,
     moved: result.moved,
     mean: result.mean,
     grid,
     ...(lighting ? { normal: lighting } : {}),
+    ...(body ? { collision: { points: body.points.length, fit: body.fit, covers: body.covers, extra: body.extra } } : {}),
     verdict,
   };
   const summary = { tool: "onmodel", kind: "tile", name: label, dir, mark: file, generatedAt: new Date().toISOString(), files, facts };
