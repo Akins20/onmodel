@@ -5,6 +5,7 @@ import { checkIcon, STORE_TARGETS } from "./rules.mjs";
 import { icoInfo } from "./ico.mjs";
 import { seam } from "./tile.mjs";
 import { pathToPolygons } from "./vector.mjs";
+import { MODES, variants, layout, adjacencyReport, coverage } from "./terrain.mjs";
 
 /**
  * A no-API gate: re-read what a run already wrote and hold it to the same rules,
@@ -36,6 +37,8 @@ const LAYOUT = [
   ["lockup.json", "lockup"],
   ["tile.json", "tile"],
   ["normal.json", "normal"],
+  ["terrain.json", "terrain"],
+  ["shape.json", "shape"],
 ];
 
 async function exists(file) {
@@ -145,6 +148,98 @@ export async function recheckSVG(file, { width = null, height = null } = {}) {
   return { file: chosen, bytes: Buffer.byteLength(text), checks };
 }
 
+/** The first of a file's candidate places that reads as text, or the "missing" result. */
+async function readText(file) {
+  const tries = Array.isArray(file) ? file : [file];
+  for (const f of tries) {
+    try {
+      return { file: f, text: await readFile(f, "utf8") };
+    } catch {
+      // try the next place
+    }
+  }
+  return { file: tries[0], error: "missing", checks: [{ check: "present", ok: false, detail: `not on disk under the run folder (${path.basename(tries[0])})` }] };
+}
+
+const vectors = (list) => {
+  const n = list.split(",").map((v) => Number(v.trim()));
+  const pts = [];
+  for (let i = 0; i + 1 < n.length; i += 2) pts.push([n[i], n[i + 1]]);
+  return { pts, ok: n.length % 2 === 0 && n.every(Number.isFinite) };
+};
+
+/**
+ * Re-reads a terrain TileSet and holds every cell's peering bits to the shape drawn there.
+ * Which shape sits at which cell is arithmetic from the mode and the column count, so a
+ * bit added, dropped or moved by hand in the .tres is caught: it is exactly the error that
+ * looks fine in the editor and tears a hole in the map later.
+ */
+export async function recheckTileSet(file, expected = null, cellSize = null) {
+  const got = await readText(file);
+  if (got.error) return got;
+  const { text } = got;
+  const modeNum = /terrain_set_0\/mode = (\d+)/.exec(text);
+  const mode = modeNum ? Object.keys(MODES).find((k) => MODES[k] === Number(modeNum[1])) ?? null : null;
+  const tiles = [...text.matchAll(/^(\d+):(\d+)\/0 = 0$/gm)].map((m) => `${m[1]}:${m[2]}`);
+  const bits = new Map(tiles.map((t) => [t, []]));
+  for (const m of text.matchAll(/^(\d+):(\d+)\/0\/terrains_peering_bit\/(\w+) = 0$/gm)) bits.get(`${m[1]}:${m[2]}`)?.push(m[3]);
+  // A tile that is not in the terrain is never chosen by the painter, however right its
+  // bits are, so both lines that put it there are needed.
+  const inSet = new Set([...text.matchAll(/^(\d+):(\d+)\/0\/terrain_set = 0$/gm)].map((m) => `${m[1]}:${m[2]}`));
+  const inTerrain = new Set([...text.matchAll(/^(\d+):(\d+)\/0\/terrain = 0$/gm)].map((m) => `${m[1]}:${m[2]}`));
+  const checks = [{ check: "terrain", ok: Boolean(mode), detail: mode ? `a terrain set in ${mode} mode` : "no terrain set the tool knows is declared" }];
+  if (cellSize) {
+    const region = /texture_region_size = Vector2i\((\d+), (\d+)\)/.exec(text);
+    const ok = Boolean(region) && Number(region[1]) === cellSize && Number(region[2]) === cellSize;
+    checks.push({ check: "region", ok, detail: region ? `${region[1]}x${region[2]} tiles; the atlas is cut in ${cellSize}px cells` : "no tile size declared" });
+  }
+  if (mode && tiles.length) {
+    const plan = layout(mode, Math.max(...tiles.map((t) => Number(t.split(":")[0]))) + 1);
+    let wrong = 0;
+    for (const c of plan.cells) {
+      const have = bits.get(`${c.col}:${c.row}`);
+      if (!have || have.slice().sort().join() !== c.bits.slice().sort().join()) wrong++;
+    }
+    const outside = tiles.filter((t) => !inSet.has(t) || !inTerrain.has(t)).length;
+    checks.push(
+      { check: "tiles", ok: tiles.length === plan.cells.length && (expected == null || tiles.length === expected), detail: `${tiles.length} tiles declared; ${mode} mode needs ${plan.cells.length}` },
+      { check: "painted", ok: outside === 0, detail: outside ? `${outside} tiles are not in the terrain, so the painter never uses them` : "every tile is in the terrain" },
+      { check: "bits", ok: wrong === 0, detail: wrong ? `${wrong} cells declare different peering bits from the shape drawn there` : "every cell declares the bits of the shape drawn there" },
+    );
+  } else if (mode) {
+    checks.push({ check: "tiles", ok: false, detail: "no tiles declared" });
+  }
+  return { file: got.file, bytes: Buffer.byteLength(text), checks };
+}
+
+/** Re-reads a shape's points file: the shapes still parse and are what the run reported. */
+export async function recheckPoints(file, facts = {}) {
+  const got = await readText(file);
+  if (got.error) return got;
+  const shapes = [...got.text.matchAll(/PackedVector2Array\(([^)]*)\)/g)].map((m) => vectors(m[1]));
+  const total = shapes.reduce((t, s) => t + s.pts.length, 0);
+  const checks = [
+    { check: "parses", ok: shapes.length > 0 && shapes.every((s) => s.ok && s.pts.length >= 3), detail: `${shapes.length} shape${shapes.length === 1 ? "" : "s"}, ${total} points` },
+    { check: "shapes", ok: facts.shapes == null || (shapes.length === facts.shapes && total === facts.points), detail: `the run reported ${facts.shapes ?? "?"} shapes and ${facts.points ?? "?"} points` },
+    { check: "budget", ok: facts.budget == null || shapes.every((s) => s.pts.length <= facts.budget), detail: `the most points in one shape is ${Math.max(0, ...shapes.map((s) => s.pts.length))}; the budget was ${facts.budget ?? "not recorded"}` },
+  ];
+  return { file: got.file, bytes: Buffer.byteLength(got.text), checks, first: shapes[0]?.pts ?? null };
+}
+
+/** Re-reads an OccluderPolygon2D and holds it to the first shape in the points file. */
+export async function recheckOccluder(file, first = null) {
+  const got = await readText(file);
+  if (got.error) return got;
+  const m = /^polygon = PackedVector2Array\(([^)]*)\)$/m.exec(got.text);
+  const poly = m ? vectors(m[1]) : null;
+  const same = Boolean(poly && first) && poly.pts.length === first.length && poly.pts.every(([x, y], i) => Math.abs(x - first[i][0]) < 0.01 && Math.abs(y - first[i][1]) < 0.01);
+  const checks = [
+    { check: "parses", ok: Boolean(poly?.ok) && poly.pts.length >= 3, detail: poly ? `${poly.pts.length} points` : "no polygon in it" },
+    ...(first ? [{ check: "matches", ok: same, detail: same ? "the same points as the first shape" : "differs from the first shape in the points file" }] : []),
+  ];
+  return { file: got.file, bytes: Buffer.byteLength(got.text), checks };
+}
+
 /** Finds the run directories under an output dir: the ones holding a summary, directly or in a kind's subfolder. */
 export async function findRuns(outDir) {
   let entries;
@@ -250,10 +345,10 @@ export async function checkRun({ dir }) {
     if (!run?.data?.files?.svg) continue;
     const { base, data } = run;
     const f = data.facts ?? {};
-    const rel = String(data.files.svg).split(/[\/]/).pop();
+    const rel = String(data.files.svg).split(/[\\/]/).pop();
     const files = [{ rel, ...(await recheckSVG(candidatesFor(base, { rel, recorded: data.files.svg, summaryDir: data.dir }), { width: f.width ?? null, height: f.height ?? null })) }];
     if (data.files.render) {
-      const r = String(data.files.render).split(/[\/]/).pop();
+      const r = String(data.files.render).split(/[\\/]/).pop();
       files.push({ rel: r, ...(await recheckFile(candidatesFor(base, { rel: r, recorded: data.files.render, summaryDir: data.dir }), f.width && f.height ? { width: f.width, height: f.height } : null)) });
     }
     results.push({ kind, name: data.name, dir: base, files });
@@ -265,7 +360,7 @@ export async function checkRun({ dir }) {
   if (tile?.data?.files?.tile) {
     const { base, data } = tile;
     const f = data.facts ?? {};
-    const rel = String(data.files.tile).split(/[\/]/).pop();
+    const rel = String(data.files.tile).split(/[\\/]/).pop();
     const got = await recheckFile(candidatesFor(base, { rel, recorded: data.files.tile, summaryDir: data.dir }), f.width && f.height ? { width: f.width, height: f.height } : null);
     if (!got.error) {
       const buffer = await readFile(got.file);
@@ -274,17 +369,83 @@ export async function checkRun({ dir }) {
     }
     const files = [{ rel, ...got }];
     if (data.files.normal) {
-      const r = String(data.files.normal).split(/[\/]/).pop();
+      const r = String(data.files.normal).split(/[\\/]/).pop();
       files.push({ rel: r, ...(await recheckNormal(candidatesFor(base, { rel: r, recorded: data.files.normal, summaryDir: data.dir }), { wrap: true })) });
     }
     results.push({ kind: "tile", name: data.name, dir: base, files });
+  }
+
+  // A terrain set is a measurement too: the atlas is decoded and every pair that can touch
+  // again, so an atlas repainted or re-saved at the same size is caught rather than passed on
+  // the numbers recorded when it was made. Where each cell sits is arithmetic from the mode
+  // and the cell size, so nothing about the layout has to be believed either.
+  const terrain = await load("terrain.json", "terrain");
+  if (terrain?.data?.files?.atlas) {
+    const { base, data } = terrain;
+    const f = data.facts ?? {};
+    const rel = String(data.files.atlas).split(/[\\/]/).pop();
+    const got = await recheckFile(candidatesFor(base, { rel, recorded: data.files.atlas, summaryDir: data.dir }), f.width && f.height ? { width: f.width, height: f.height } : null);
+    if (!got.error && Object.hasOwn(MODES, String(f.mode)) && f.cellSize) {
+      const image = decodeImage(await readFile(got.file));
+      const plan = layout(f.mode, Math.floor(image.width / f.cellSize));
+      const fitsGrid = image.width % f.cellSize === 0 && image.height === plan.rows * f.cellSize;
+      const checks = [{ check: "cells", ok: fitsGrid && plan.cells.length === variants(f.mode).length, detail: `${plan.cells.length} cells of ${f.cellSize}px in a ${image.width}x${image.height} atlas; ${f.mode} mode needs ${variants(f.mode).length}` }];
+      if (fitsGrid) {
+        const atlas = { image, cells: plan.cells, cellSize: f.cellSize, mode: f.mode };
+        const map = adjacencyReport(atlas);
+        const held = coverage(atlas);
+        // Sides-only cannot close a diagonal, so its number is held to what it was, not to all.
+        const fits = f.mode === "both" ? map.joins === 1 && map.missing === 0 : map.missing === 0 && (f.pairsMatched == null || map.matched === f.pairsMatched);
+        checks.push(
+          { check: "fits", ok: fits, detail: `${map.matched} of the ${map.edges} pairs that can touch join${f.pairsMatched != null ? `; ${f.pairsMatched} did when it was made` : ""}` },
+          {
+            check: "drawn",
+            ok: held.hollow === 0 && held.gaps === 0 && held.misdrawn === 0,
+            detail: held.hollow || held.gaps || held.misdrawn ? `${held.misdrawn} cells draw a different shape from their bits, ${held.hollow} are empty at the centre, and the full cell has ${held.gaps} empty pixels` : "every cell draws the shape its bits declare",
+          },
+        );
+      }
+      got.checks = [...got.checks, ...checks];
+    } else if (!got.error) {
+      got.checks = [...got.checks, { check: "cells", ok: false, detail: "terrain.json records no mode or cell size to lay the atlas out by; run onmodel terrain again" }];
+    }
+    const files = [{ rel, ...got }];
+    if (data.files.tileset) {
+      const r = String(data.files.tileset).split(/[\\/]/).pop();
+      files.push({ rel: r, ...(await recheckTileSet(candidatesFor(base, { rel: r, recorded: data.files.tileset, summaryDir: data.dir }), f.expected ?? null, f.cellSize ?? null)) });
+    }
+    results.push({ kind: "terrain", name: data.name, dir: base, files });
+  }
+
+  // A shape is its points. The art it was traced from is not part of the run, so the fit
+  // cannot be measured again here; what can be is that the points still parse, are still
+  // the shapes and the count the run reported, stay within the budget, and that the
+  // occluder still holds the first of them.
+  const shape = await load("shape.json", "shape");
+  if (shape?.data?.files?.points) {
+    const { base, data } = shape;
+    const f = data.facts ?? {};
+    const files = [];
+    const r = String(data.files.points).split(/[\\/]/).pop();
+    const points = await recheckPoints(candidatesFor(base, { rel: r, recorded: data.files.points, summaryDir: data.dir }), f);
+    files.push({ rel: r, ...points });
+    if (data.files.occluder) {
+      const o = String(data.files.occluder).split(/[\\/]/).pop();
+      files.push({ rel: o, ...(await recheckOccluder(candidatesFor(base, { rel: o, recorded: data.files.occluder, summaryDir: data.dir }), points.first ?? null)) });
+    }
+    if (data.files.preview) {
+      const p = String(data.files.preview).split(/[\\/]/).pop();
+      files.push({ rel: p, ...(await recheckFile(candidatesFor(base, { rel: p, recorded: data.files.preview, summaryDir: data.dir }), f.width && f.height ? { width: f.width, height: f.height } : null)) });
+    }
+    for (const file of files) delete file.first;
+    results.push({ kind: "shape", name: data.name, dir: base, files });
   }
 
   const normal = await load("normal.json", "normal");
   if (normal?.data?.files?.normal) {
     const { base, data } = normal;
     const f = data.facts ?? {};
-    const rel = String(data.files.normal).split(/[\/]/).pop();
+    const rel = String(data.files.normal).split(/[\\/]/).pop();
     const got = await recheckNormal(candidatesFor(base, { rel, recorded: data.files.normal, summaryDir: data.dir }), { wrap: Boolean(f.wrap) });
     results.push({ kind: "normal", name: data.name, dir: base, files: [{ rel, ...got }] });
   }

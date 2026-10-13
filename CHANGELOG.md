@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- Terrain sets (`onmodel terrain`): the 16 or 47 cells a Godot TileMapLayer needs to paint
+  a material rather than place tiles, composited from one seamless fill with every peering
+  bit derived from the shape. 47 and not 256, because a corner only means anything when
+  both sides beside it are already there. The fill has to tile, since two cells side by
+  side hold it at the same phase, so its own join is measured here too, on the fill as the
+  cells hold it. Each cell holds the WHOLE fill once, scaled to the cell (32 px unless
+  `--cell` says otherwise): sampling a bigger fill took only its top-left corner, so every
+  join in the map joined two different phases of it and seamed at 8.85x its grain while
+  the fill itself measured as seamless. Shrinking averages areas, which keeps the fill's
+  wrap; enlarging blends across the wrap rather than clamping to the edge, which seamed at
+  3.61x; pixel art is enlarged without blending. The fill has to be solid, since the cell
+  shapes are what make a terrain transparent.
+  The checking is the point: a set one bit out looks fine in the editor and tears a hole in
+  the map later, so every pair of cells that can ever sit side by side is checked along its
+  shared edge, 338 of 338 for the 47-cell set. EVERY pair is the wrong test, since most
+  cannot occur together and demanding they agree marks a correct set as broken; one random
+  map is too weak, since a 24 by 24 one placed only 38 of the 47 cells and a notch in any of
+  the other nine passed. Which pairs occur depends only on the window of squares around
+  them, so trying every way to fill it finds all of them, exactly. Sides-only is reported
+  rather than flattered, since MATCH_SIDES has no bit for a corner and 32 of the 128 pairs
+  that can touch join; that is the mode, not a fault.
+  The rounding that makes a corner look drawn stops short of every edge on purpose: blur
+  reaching an edge would change the pixels along it and two cells meant to butt together
+  would stop matching. The blur runs twice and so reaches twice its radius, which a first
+  clamp missed (a requested `--round 8` on a 32 px cell broke 36 of the 47 cells), and it
+  also steps down until it cannot eat a shape, since a wide `--margin` leaves each side a
+  neck the rounding cut through. Pixels come whole: a `--round` of 2.5 drew every cell
+  empty, and an empty set passes every edge check, so whole numbers are required and each
+  cell is also checked to draw the shape its bits declare.
+
 - Normal maps (`onmodel normal`), derived from the art rather than painted, so a 2D light
   knows which way each pixel faces. A painted sprite has no geometry, so the height is
   invented from luminance, which is an assumption and is wrong wherever colour and depth
@@ -34,7 +64,14 @@
   re-export that brightens one edge is caught even though the file still decodes at the
   right size. A normal map is re-derived from its own pixels: every texel must decode close
   to a unit vector pointing out of the surface, which a resize, a JPEG round trip or a
-  channel swap stops satisfying long before it looks wrong to a person.
+  channel swap stops satisfying long before it looks wrong to a person. A terrain set is
+  checked pair by pair again from the atlas on disk and each cell is held to the shape its
+  bits declare, so a notch touched up on one edge is caught, and so is an atlas re-saved
+  with its alpha flattened (every edge still agrees, solid against solid). Every cell's
+  peering bits in the TileSet are held to the shape drawn there, every tile must still be
+  in the terrain (one taken out is never painted), and the tile size must match the cells. A shape's points must
+  still parse, match the count the run reported and stay within budget, and its occluder
+  must still hold the first of them.
 - A `.import` preset is written beside each PNG. Godot does not load a PNG, it loads the
   texture its importer made, and a perfect PNG imported wrong looks exactly like a bad one.
   Only `[params]` is written: Godot 4.7.2 was asked what it does with a params-only file

@@ -191,7 +191,7 @@ export function atlasGodot(atlas, { file = "atlas.png", resPath = null, normal =
  * is declared by the line `<column>:<row>/0 = 0`, and leaving it out leaves the cell
  * empty in the editor however good the pixels are.
  */
-export function atlasTileSet(image, { file = "tiles.png", resPath = null, tileWidth = 32, tileHeight = tileWidth, collision = null, occluder = null } = {}) {
+export function atlasTileSet(image, { file = "tiles.png", resPath = null, tileWidth = 32, tileHeight = tileWidth, collision = null, occluder = null, terrain = null } = {}) {
   const texture = resPath ?? `res://${file}`;
   const columns = Math.max(1, Math.floor(image.width / tileWidth));
   const rows = Math.max(1, Math.floor(image.height / tileHeight));
@@ -202,16 +202,27 @@ export function atlasTileSet(image, { file = "tiles.png", resPath = null, tileWi
   const head = [`[gd_resource type="TileSet" format=3]`, "", `[ext_resource type="Texture2D" path="${texture}" id="1_atlas"]`, ""];
   if (occluder) head.push(`[sub_resource type="OccluderPolygon2D" id="OccluderPolygon2D_0"]`, `polygon = ${packedVector2(occluder, centre)}`, "");
   const cells = [];
-  for (let y = 0; y < rows; y++) {
-    for (let x = 0; x < columns; x++) {
-      cells.push(`${x}:${y}/0 = 0`);
-      if (occluder) cells.push(`${x}:${y}/0/occlusion_layer_0/polygon_0/polygon = SubResource("OccluderPolygon2D_0")`);
-      if (collision) cells.push(`${x}:${y}/0/physics_layer_0/polygon_0/points = ${packedVector2(collision, centre)}`);
+  // With a terrain set, only the cells it names are declared, each carrying the peering
+  // bits that tell a TileMapLayer which neighbours it fits against. Without one, every
+  // cell of the grid is declared as a plain tile.
+  const grid = terrain ? terrain.cells.map((c) => [c.col, c.row, c]) : [];
+  if (!terrain) for (let y = 0; y < rows; y++) for (let x = 0; x < columns; x++) grid.push([x, y, null]);
+  for (const [x, y, t] of grid) {
+    cells.push(`${x}:${y}/0 = 0`);
+    if (t) {
+      cells.push(`${x}:${y}/0/terrain_set = 0`, `${x}:${y}/0/terrain = 0`);
+      for (const bit of t.bits) cells.push(`${x}:${y}/0/terrains_peering_bit/${bit} = 0`);
     }
+    if (occluder) cells.push(`${x}:${y}/0/occlusion_layer_0/polygon_0/polygon = SubResource("OccluderPolygon2D_0")`);
+    if (collision) cells.push(`${x}:${y}/0/physics_layer_0/polygon_0/points = ${packedVector2(collision, centre)}`);
   }
   const layers = [];
   if (occluder) layers.push("occlusion_layer_0/light_mask = 1");
   if (collision) layers.push("physics_layer_0/collision_layer = 1");
+  if (terrain) {
+    const c = terrain.color ?? [0.4, 0.7, 0.4];
+    layers.push(`terrain_set_0/mode = ${terrain.mode}`, `terrain_set_0/terrain_0/name = "${String(terrain.name ?? "terrain").replace(/"/g, "")}"`, `terrain_set_0/terrain_0/color = Color(${c[0]}, ${c[1]}, ${c[2]}, 1)`);
+  }
   return [
     ...head,
     `[sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_0"]`,

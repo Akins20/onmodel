@@ -260,3 +260,89 @@ test("a tile whose join has been broken since fails the gate", async () => {
   assert.equal(fails[0].check, "tiles");
   assert.match(fails[0].detail, /the join is .* its own grain|the texture's own grain/);
 });
+
+test("a terrain set is measured again from its pixels and its TileSet, not from what was recorded", async () => {
+  const { makeTerrain } = await import("../src/terrainset.mjs");
+  const { readFile } = await import("node:fs/promises");
+  const { decodeImage } = await import("../src/image.mjs");
+  const dir = await mkdtemp(path.join(tmpdir(), "onmodel-terrainchk-"));
+  const W = 32;
+  const fillFile = path.join(dir, "grass.png");
+  await writeFile(fillFile, encodePNG(art(W, W, (x, y) => { const v = 120 + 40 * Math.sin((2 * Math.PI * x * 2) / W) * Math.cos((2 * Math.PI * y * 2) / W); return [v * 0.5, v, v * 0.45]; })));
+  const made = await makeTerrain({ config: { out: dir }, markPath: fillFile, log: () => {} });
+  assert.equal(made.facts.verdict, "complete");
+
+  const run = path.join(dir, "grass");
+  const before = await checkRun({ dir: run });
+  assert.equal(failuresOf(before).length, 0, JSON.stringify(failuresOf(before)));
+  const checks = before.find((r) => r.kind === "terrain").files.flatMap((f) => f.checks.map((c) => c.check));
+  for (const c of ["cells", "fits", "drawn", "terrain", "region", "tiles", "painted", "bits"]) assert.ok(checks.includes(c), `checks ${c}`);
+
+  // Re-saved with its alpha flattened: the same size, every edge still agrees (solid meets
+  // solid), and the recorded numbers are untouched. Only the pixels give it away.
+  const atlasFile = made.files.atlas;
+  const good = await readFile(atlasFile);
+  const flat = decodeImage(good);
+  for (let i = 3; i < flat.data.length; i += 4) flat.data[i] = 255;
+  await writeFile(atlasFile, encodePNG(flat));
+  const flattened = failuresOf(await checkRun({ dir: run }));
+  assert.deepEqual(flattened.map((f) => f.check), ["drawn"], JSON.stringify(flattened));
+  await writeFile(atlasFile, good);
+
+  // One peering bit dropped by hand from the TileSet: it still loads, and that cell now
+  // claims a shape it does not draw.
+  const tres = await readFile(made.files.tileset, "utf8");
+  const edited = tres.replace(/^1:0\/0\/terrains_peering_bit\/top_side = 0\n/m, "");
+  assert.notEqual(edited, tres, "the fixture has the line to drop");
+  await writeFile(made.files.tileset, edited);
+  const dropped = failuresOf(await checkRun({ dir: run }));
+  assert.deepEqual(dropped.map((f) => f.check), ["bits"], JSON.stringify(dropped));
+
+  // A tile taken out of the terrain keeps its bits but is never painted.
+  const unpainted = tres.replace(/^2:0\/0\/terrain = 0\n/m, "");
+  assert.notEqual(unpainted, tres);
+  await writeFile(made.files.tileset, unpainted);
+  const out = failuresOf(await checkRun({ dir: run }));
+  assert.deepEqual(out.map((f) => f.check), ["painted"], JSON.stringify(out));
+  await writeFile(made.files.tileset, tres);
+
+  // A notch on the edge of a cell, the kind of touch-up an image editor makes.
+  const notched = decodeImage(good);
+  const cs = made.facts.cellSize;
+  for (let y = 3; y <= 8; y++) for (let x = cs - 2; x < cs; x++) notched.data[((4 * cs + y) * notched.width + 5 * cs + x) * 4 + 3] = 0;
+  await writeFile(atlasFile, encodePNG(notched));
+  const torn = failuresOf(await checkRun({ dir: run }));
+  assert.deepEqual(torn.map((f) => f.check), ["fits"], JSON.stringify(torn));
+});
+
+test("a shape run is checked, not just found", async () => {
+  const { makeShape } = await import("../src/shape.mjs");
+  const { readFile } = await import("node:fs/promises");
+  const dir = await mkdtemp(path.join(tmpdir(), "onmodel-shapechk-"));
+  const W = 64;
+  const disc = { width: W, height: W, data: new Uint8Array(W * W * 4) };
+  for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) if (Math.hypot(x - 31.5, y - 31.5) < 24) disc.data.set([200, 80, 60, 255], (y * W + x) * 4);
+  const markFile = path.join(dir, "rock.png");
+  await writeFile(markFile, encodePNG(disc));
+  const made = await makeShape({ config: { out: dir }, markPath: markFile, points: 16, log: () => {} });
+
+  const run = path.join(dir, "rock");
+  const before = await checkRun({ dir: run });
+  assert.ok(before.some((r) => r.kind === "shape"), "a shape run is checked at all");
+  assert.equal(failuresOf(before).length, 0, JSON.stringify(failuresOf(before)));
+
+  // The occluder hand-edited away from the shape it was made from.
+  const occ = await readFile(made.files.occluder, "utf8");
+  await writeFile(made.files.occluder, occ.replace(/PackedVector2Array\(([-\d.]+)/, (m, n) => `PackedVector2Array(${Number(n) + 5}`));
+  const moved = failuresOf(await checkRun({ dir: run }));
+  assert.deepEqual(moved.map((f) => f.check), ["matches"], JSON.stringify(moved));
+  await writeFile(made.files.occluder, occ);
+
+  // Points added past the budget the run was asked to keep to.
+  const pts = await readFile(made.files.points, "utf8");
+  const extra = Array.from({ length: 20 }, (_, i) => `${i}, ${i}`).join(", ");
+  await writeFile(made.files.points, pts.replace(/PackedVector2Array\(/, `PackedVector2Array(${extra}, `));
+  const over = failuresOf(await checkRun({ dir: run }));
+  assert.ok(over.some((f) => f.check === "budget"), JSON.stringify(over));
+  assert.ok(over.some((f) => f.check === "shapes"), "and it no longer matches the count the run reported");
+});

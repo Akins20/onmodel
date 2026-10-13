@@ -16,6 +16,7 @@ import { makeLockup } from "../src/lockup.mjs";
 import { makeTileset } from "../src/tileset.mjs";
 import { makeNormalMap } from "../src/normalmap.mjs";
 import { makeShape } from "../src/shape.mjs";
+import { makeTerrain } from "../src/terrainset.mjs";
 import { makeVector } from "../src/vectorize.mjs";
 import { checkRun, findRuns, failuresOf } from "../src/check.mjs";
 
@@ -45,6 +46,10 @@ Commands
   text --string "ACME" --font f.ttf  a wordmark or lettermark set from a real font, not drawn: the letters are
        [--name slug] [--px 128]      the type designer's own outlines, so they cannot come out malformed
        [--tracking 20] [--colour #hex] [--no-kerning]                                  (free)
+  terrain --mark fill.png or --name run  the 16 or 47 cells a Godot TileMapLayer needs to paint a
+          [--mode both|sides]        material, composited from one seamless fill (scaled to one cell)
+          [--cell 32] [--round 4]    with every peering bit derived, then every pair of cells that can
+          [--terrain name]           touch is checked edge by edge; --round is clamped so edges stay exact (free)
   shape --mark art.png or --name run  the collision and occlusion shape traced from the art's own
         [--points 16]                silhouette, simplified to a budget, with an OccluderPolygon2D and
                                      the outline drawn over the art to show where it is wrong (free)
@@ -140,6 +145,12 @@ const OPTIONS = {
   normal: { type: "boolean" },
   points: { type: "string" },
   collision: { type: "boolean" },
+  mode: { type: "string" },
+  cell: { type: "string" },
+  columns: { type: "string" },
+  margin: { type: "string" },
+  round: { type: "string" },
+  terrain: { type: "string" },
   noise: { type: "string" },
   change: { type: "string" },
   in: { type: "string" },
@@ -316,6 +327,52 @@ async function main() {
       ];
       emit(config, lines.join("\n"), { command: "lockup", ...result });
       if (f.verdict === "incomplete" || f.verdict === "poor") process.exitCode = 2;
+      return;
+    }
+    case "terrain": {
+      const config = await loadConfig(flags);
+      // Pixels only come whole: a --round of 2.5 indexed half a pixel, read nothing, and left
+      // every cell empty, which the edge check then called perfect.
+      const num = (v, what, lo, hi) => {
+        if (v == null) return null;
+        const n = Number(v);
+        if (!Number.isInteger(n) || n < lo || n > hi) throw new Error(`--${what} must be a whole number between ${lo} and ${hi}`);
+        return n;
+      };
+      const result = await makeTerrain({
+        config,
+        name: flags.name ?? null,
+        candidate: flags.candidate ?? null,
+        markPath: flags.mark ?? null,
+        mode: flags.mode ?? "both",
+        size: num(flags.cell, "cell", 4, 512),
+        columns: num(flags.columns, "columns", 1, 32) ?? 8,
+        margin: num(flags.margin, "margin", 1, 256),
+        round: num(flags.round, "round", 0, 64),
+        terrainName: flags.terrain ?? null,
+      });
+      const f = result.facts;
+      const lines = [
+        `${result.name} terrain in ${result.dir}: ${f.verdict} (${f.cells} of ${f.expected} cells at ${f.cellSize}px, ${f.width}x${f.height})`,
+        f.fillFilter === "none"
+          ? `the ${f.fillWidth}x${f.fillHeight} fill is one cell exactly, so each cell holds it as painted`
+          : `the ${f.fillWidth}x${f.fillHeight} fill was scaled to one ${f.cellSize}px cell (${f.fillFilter}), so each cell holds all of it${f.fillWidth !== f.fillHeight ? ", stretched to square" : ""}`,
+        `${f.pairsMatched} of the ${f.pairs} pairs of cells that can ever touch join exactly${f.missingCells ? `, and ${f.missingCells} shapes a map can ask for have no cell` : ""}`,
+        f.seamless
+          ? f.joins === 1
+            ? "every neighbour a map could ever ask for fits, so the terrain paints without a seam"
+            : "some neighbours do not fit, so the map will tear where they meet"
+          : "sides-only has no bit for a corner, so where two cells disagree about what is above them the edge steps; use --mode both for seamless terrain",
+        f.fillJoin > 1.5
+          ? `the fill does not tile (its own join is ${f.fillJoin}x its grain), so the material will seam between cells: run onmodel tile --mark on it, then build from the file it writes (${config.out}/<name>/tile/<name>.png)`
+          : `the fill tiles (join ${f.fillJoin}x its grain), so the material carries across cells`,
+        ...(f.fillHoles ? [`the fill has ${f.fillHoles} see-through pixels; a terrain's material has to be solid, since the cell shapes are what make it transparent`] : []),
+        ...(f.hollowCells || f.fullCellGaps ? [`${f.hollowCells} cells have no material at their centre and the full cell has ${f.fullCellGaps} empty pixels, so the set would paint holes`] : []),
+        ...(f.misdrawnCells ? [`${f.misdrawnCells} cells draw a different shape from the bits they declare; a --margin this wide leaves each side a neck too thin to survive the rounding`] : []),
+        `look at ${path.basename(result.files.map)}: the set laid into a patch of terrain, which is the only way to see it hold together`,
+      ];
+      emit(config, lines.join("\n"), { command: "terrain", ...result });
+      if (f.verdict !== "complete") process.exitCode = 2;
       return;
     }
     case "shape": {

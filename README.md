@@ -219,6 +219,44 @@ foreground, the themed layer and the notification icon. The Android vectors sit 
 serve older ones. Each vector icon is checked to draw like its PNG. Pixel art keeps
 PNGs on Android, which draws vectors without crisp edges.
 
+## Terrain sets
+
+```bash
+onmodel tile    --mark grass.png                                  # first, a fill that really tiles
+onmodel terrain --mark onmodel-out/grass/tile/grass.png --cell 32 # then the 47 cells, from the tiled fill
+```
+
+A Godot TileMapLayer does not place tiles, it paints a material: you give it a terrain and
+it picks the cell whose neighbours match. That needs 16 cells matching on sides, or 47
+matching on corners and sides. Not 256, because a corner only means anything when both
+sides beside it are already there, since nothing reaches diagonally past a gap.
+
+The cells are composited from one seamless fill and every peering bit is derived from the
+shape rather than typed in. The fill has to tile, because two cells side by side hold it at
+the same phase and show the material carrying on across the join, so the fill's own join is
+measured here too and a bad one is named rather than inherited. `tile` writes its fixed fill
+into its own run folder and leaves yours alone, which is why the second command reads from
+there. Each cell holds the whole fill once, scaled to the cell (32 px by default), and the
+fill has to be solid: the cell shapes are what make a terrain transparent.
+
+**The checking is the point.** A terrain set one bit out looks perfectly fine in the editor
+and tears a hole in the map three hours later. So every pair of cells that can ever sit side
+by side is checked along its shared edge: 338 of 338 for the 47-cell set, with every shape a
+map can ask for supplied. Each cell is also held to the shape its bits declare, since an
+empty set, or one flattened to solid squares, agrees along every edge.
+
+*Every* pair is the wrong test, and so is one random map; both were tried. Most pairs cannot
+occur together at all, so what their shared edge does is nobody's business, and demanding
+they agree marks a correct set as broken. A 24 by 24 map avoids that but placed only 38 of
+the 47 cells, so a notch in any of the other nine passed. Which pairs can occur depends only
+on the squares around them, so trying every way to fill that small window finds all of
+them, exactly.
+
+Sides-only is reported honestly rather than flattered: `MATCH_SIDES` has no bit for a
+corner, so where two cells disagree about what is above them the edge steps, and 32 of the
+128 pairs that can touch join. That is the mode, not a fault, and it is the reason to pick
+`--mode both` for anything meant to look seamless.
+
 ## Lighting, bodies and Godot
 
 ```bash
@@ -620,6 +658,7 @@ their recorded size. Any failure exits with code 2, naming the file and the rule
 | `models [--filter banana]` | the models the key can use, which make images, and the price of each |
 | `generate --subject "..."` | paint a subject from the brief: candidates, keyed, measured, sized, judged |
 | `icons --name x` or `--mark file.png` | every icon Android, iOS, the web and Expo ask for, checked against the rulebook, with mask previews and vector icons when the mark traces (free) |
+| `terrain --mark fill.png` | the 16 or 47 cells a Godot TileMapLayer paints a material with, every pair that can touch checked edge by edge (free) |
 | `normal --mark art.png` | a normal map derived from the art, with the Godot CanvasTexture and the art lit from four corners (free) |
 | `shape --mark art.png` | the collision and occlusion shape traced from the silhouette, simplified to a budget (free) |
 | `tile --mark t.png` | check whether a texture really tiles, close the join if it does not, and write a Godot TileSet (free) |

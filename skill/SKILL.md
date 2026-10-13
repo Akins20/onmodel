@@ -76,6 +76,17 @@ read its facts.
    and the `head.html` tags in the page head; for Expo, copy `expo/*.png` to
    `./assets` and merge `expo/app.json`. Commit the icons with the mark that made them.
 
+## Terrain sets
+`onmodel terrain --mark <fill.png> --cell 32` builds the 16 or 47 cells a Godot
+TileMapLayer paints with. Run `onmodel tile` on the fill FIRST and build from the file it
+writes (`onmodel-out/<name>/tile/<name>.png`, it never changes yours): two cells side by side
+hold the fill at the same phase, so a fill that does not tile seams between every cell. The
+fill is scaled to one cell (32 px by default) and must be solid. Use
+`--mode both` (47 cells) for anything meant to look seamless; `--mode sides` (16) has no
+bit for a corner and steps at diagonals, which the run reports rather than hides. Look at
+the map image: the set laid into a patch of terrain is the only way to see it hold
+together.
+
 ## Lighting and bodies
 `onmodel normal --mark <art.png>` derives a normal map so a 2D light works, and writes the
 art lit from four corners. LOOK AT THAT STRIP: no number can tell you the bumps read as
