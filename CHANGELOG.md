@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+- Godot reads what onmodel writes. `sprites` now writes a `SpriteFrames` resource beside
+  the atlas and the new `tile` writes a `TileSet`, so neither needs an importer or a
+  plugin. Neither format is from memory: Godot 4.7.2 was asked to build each resource and
+  save it, and these reproduce what it wrote. That caught what a guess gets wrong, since
+  a SpriteFrames `loop` is written `1` or `0` rather than `true`, a frame's `duration` is
+  a multiple of the animation's speed rather than a time, and a TileSet cell that is not
+  declared is empty in the editor however good the pixels are. Godot loads both files
+  back and reports the right animations, speeds, loops, regions and tiles. Sub-resource
+  ids are numbered rather than random, as Godot's own are, so the same sprites give the
+  same file and a diff shows what actually changed.
+- Tiles that actually tile (`onmodel tile`). A painter paints one square and never sees
+  it repeated, so it cannot know its right edge has to run into its left; across a floor
+  that becomes a grid of seams. The join is measured against the texture's own grain,
+  which is a ratio and so judges busy and smooth alike: noise has an enormous join in
+  absolute terms and tiles perfectly, because every step across it is just as large, and
+  an absolute threshold would have condemned it. Where the join is too sharp it is closed
+  by moving both edges to meet in the middle and fading the correction inward, leaving
+  the middle of the tile exactly as painted. The fix says what it is: it removes the
+  line, it cannot make a brick carry on across the join, so how far it had to move the
+  pixels is reported and a heavy correction is called `forced` rather than `fixed`. The
+  tile is also written out laid three by three, which is the only way to really see it.
+- A sprite action's `loop` now reaches the atlas, where it was dropped before, so a
+  one-shot action arrives in Godot as one.
+
 ## 0.4.0 (2026-10-12)
 
 - Lockups (`onmodel lockup`): a traced symbol and a wordmark set from a font, placed

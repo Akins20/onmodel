@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { inkProfile, inkRuns, sliceStrip, sharedScale, placeFrames, mirror } from "../src/strip.mjs";
 import { silhouette, iou, normalisePair, dominantPalette, paletteDelta, frameDelta, compareFrame, sequenceSmoothness } from "../src/measure.mjs";
-import { packActions, atlasJSON, atlasCSS, atlasHeader } from "../src/atlas.mjs";
+import { packActions, atlasJSON, atlasCSS, atlasHeader, atlasGodot } from "../src/atlas.mjs";
 import { encodeAPNG, encodeGIF, gifPalette, apngInfo } from "../src/anim.mjs";
 import { decodePNG, isPNG } from "../src/png.mjs";
 import { toolVersion } from "../src/config.mjs";
@@ -201,4 +201,37 @@ test("the atlas stamps the tool's real version, and never a written-down one", a
   // And the version it is handed in practice is this install's own.
   const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(await toolVersion(), pkg.version);
+});
+
+test("the Godot resource is the shape Godot itself writes, and Godot reads it back", () => {
+  // Checked against Godot 4.7.2: it was asked to build this resource and save it, and
+  // this is what it wrote. Two details a guess would get wrong: loop is 1 or 0 rather
+  // than true or false, and a frame's duration is a multiple of the animation's speed
+  // rather than a time, so uniform frames are 1.0 and the speed carries the fps.
+  const atlas = packActions([
+    { name: "idle", fps: 8, loop: true, frames: [canvas(8, 8, [[0, 0, 8, 8, RED]]), canvas(8, 8, [[0, 0, 8, 8, BLUE]])] },
+    { name: "die", fps: 12, loop: false, frames: [canvas(8, 8, [[0, 0, 8, 8, RED]])] },
+  ]);
+  const tres = atlasGodot(atlas, { file: "player.png" });
+
+  assert.match(tres, /^\[gd_resource type="SpriteFrames" format=3\]/);
+  assert.match(tres, /\[ext_resource type="Texture2D" path="res:\/\/player\.png" id="1_atlas"\]/);
+  assert.equal((tres.match(/\[sub_resource type="AtlasTexture"/g) ?? []).length, 3, "one per frame");
+  assert.match(tres, /region = Rect2\(8, 0, 8, 8\)/, "the second frame sits one frame along");
+  assert.match(tres, /region = Rect2\(0, 8, 8, 8\)/, "and the second action on the next row");
+
+  // A looping action and a one-shot one, written the way Godot writes them.
+  assert.match(tres, /"loop": 1,\n"name": &"idle",\n"speed": 8\.0/);
+  assert.match(tres, /"loop": 0,\n"name": &"die",\n"speed": 12\.0/);
+  assert.match(tres, /"duration": 1\.0/);
+  assert.ok(!/"loop": true/.test(tres), "loop is a number here, not a boolean");
+
+  // Godot gives sub-resources random ids; these are numbered, so the same sprites give
+  // the same file and a diff shows what actually changed.
+  assert.match(tres, /id="AtlasTexture_0"/);
+  assert.match(tres, /SubResource\("AtlasTexture_2"\)/);
+  assert.equal(atlasGodot(atlas, { file: "player.png" }), tres, "and it is written the same way twice");
+
+  // The texture can point anywhere in the project, since onmodel does not know its layout.
+  assert.match(atlasGodot(atlas, { file: "player.png", resPath: "res://art/sprites/player.png" }), /path="res:\/\/art\/sprites\/player\.png"/);
 });

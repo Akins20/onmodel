@@ -76,6 +76,14 @@ read its facts.
    and the `head.html` tags in the page head; for Expo, copy `expo/*.png` to
    `./assets` and merge `expo/app.json`. Commit the icons with the mark that made them.
 
+## Tiles and Godot
+A texture for a floor or a wall must tile, and the painter cannot tell whether it does.
+Run `onmodel tile --mark <t.png>` on it: the join is measured against the texture's own
+grain, closed if it is too sharp, and the tile written out laid three by three. Look at
+that grid, not the number. A verdict of `forced` means the fix had to work hard and will
+show, so paint it again rather than ship it. Sprites and tiles both write Godot resources
+(`SpriteFrames` and `TileSet`) beside their images, which Godot opens with no importer.
+
 ## Wordmarks and lettermarks
 Never ask the painter for letters. It gets them wrong, and nothing onmodel measures can
 tell a good R from a bad one, so a mangled word comes back reported as a perfect match.

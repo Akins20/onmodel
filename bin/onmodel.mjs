@@ -13,6 +13,7 @@ import { makeIcons } from "../src/icons.mjs";
 import { makeStore } from "../src/store.mjs";
 import { makeText } from "../src/text.mjs";
 import { makeLockup } from "../src/lockup.mjs";
+import { makeTileset } from "../src/tileset.mjs";
 import { makeVector } from "../src/vectorize.mjs";
 import { checkRun, findRuns, failuresOf } from "../src/check.mjs";
 
@@ -42,6 +43,9 @@ Commands
   text --string "ACME" --font f.ttf  a wordmark or lettermark set from a real font, not drawn: the letters are
        [--name slug] [--px 128]      the type designer's own outlines, so they cannot come out malformed
        [--tracking 20] [--colour #hex] [--no-kerning]                                  (free)
+  tile --mark t.png or --name run   check whether a texture really tiles, close the join if it does not,
+       [--band 8] [--grid 3]        and write a Godot TileSet; the join is measured against the
+       [--no-fix]                   texture's own grain, so busy and smooth are judged alike (free)
   lockup --string "ACME" --font f.ttf  a traced symbol and a set wordmark placed together as one mark
          --mark logo.png or --name run  [--layout beside|above] [--px 128] [--gap 0.5] [--symbol 1.2]
                                     the symbol is sized and centred on the cap height, not the em (free)
@@ -116,6 +120,9 @@ const OPTIONS = {
   layout: { type: "string" },
   gap: { type: "string" },
   symbol: { type: "string" },
+  band: { type: "string" },
+  grid: { type: "string" },
+  "no-fix": { type: "boolean" },
   noise: { type: "string" },
   change: { type: "string" },
   in: { type: "string" },
@@ -292,6 +299,39 @@ async function main() {
       ];
       emit(config, lines.join("\n"), { command: "lockup", ...result });
       if (f.verdict === "incomplete" || f.verdict === "poor") process.exitCode = 2;
+      return;
+    }
+    case "tile": {
+      const config = await loadConfig(flags);
+      const num = (v, what, lo, hi) => {
+        if (v == null) return null;
+        const n = Number(v);
+        if (!Number.isFinite(n) || n < lo || n > hi) throw new Error(`--${what} must be a number between ${lo} and ${hi}`);
+        return n;
+      };
+      const result = await makeTileset({
+        config,
+        name: flags.name ?? null,
+        candidate: flags.candidate ?? null,
+        markPath: flags.mark ?? null,
+        band: num(flags.band, "band", 1, 512),
+        grid: num(flags.grid, "grid", 2, 8) ?? 3,
+        fix: !flags["no-fix"],
+      });
+      const f = result.facts;
+      const said = {
+        seamless: "it already tiles: the join is no sharper than the texture's own grain",
+        fixed: `the join was ${f.ratioBefore}x the texture's own grain and is closed; ${Math.round(f.moved * 100)}% of pixels moved, by ${f.mean} on average`,
+        forced: `the join was ${f.ratioBefore}x the texture's own grain. It is closed, but the correction was heavy (${f.mean} on average), so it will show: paint this one again rather than rely on the fix`,
+        seams: `the join is ${f.ratioBefore}x the texture's own grain and was left alone, so it will seam`,
+      }[f.verdict];
+      const lines = [
+        `${result.name} tile in ${result.dir}: ${f.verdict} (${f.width}x${f.height})`,
+        said,
+        `look at ${path.basename(result.files.tiled)}: the tile laid ${f.grid} by ${f.grid}, which is the only way to really see it`,
+      ];
+      emit(config, lines.join("\n"), { command: "tile", ...result });
+      if (f.verdict === "forced" || f.verdict === "seams") process.exitCode = 2;
       return;
     }
     case "store": {

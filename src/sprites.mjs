@@ -8,7 +8,7 @@ import { chooseKey, keyOut, quantize, hardenAlpha, fillBackground, blit, resize,
 import { toHex } from "./color.mjs";
 import { sliceStrip, placeFrames, mirror } from "./strip.mjs";
 import { measureAction, paletteDelta, normalisePair, iou, silhouette, HARD_FLAGS } from "./measure.mjs";
-import { packActions, atlasJSON, atlasCSS, atlasHeader } from "./atlas.mjs";
+import { packActions, atlasJSON, atlasCSS, atlasHeader, atlasGodot } from "./atlas.mjs";
 import { encodeAPNG, encodeGIF } from "./anim.mjs";
 import { generate, preambleParts, slug } from "./generate.mjs";
 import { spriteImageCounts } from "./plan.mjs";
@@ -651,11 +651,11 @@ export async function makeSprites({ config, name, subject = null, judge = true, 
   const packed = [];
   for (const r of finished) {
     r.record.files = await writeAction(r.record.name, r.placed, r.record.fps, r.record.dir);
-    packed.push({ name: r.record.name, frames: r.placed, fps: r.record.fps });
+    packed.push({ name: r.record.name, frames: r.placed, fps: r.record.fps, loop: r.record.loop !== false });
     if (r.record.mirror) {
       const mirrored = r.placed.map((f) => mirror(f));
       r.record.mirrorFiles = await writeAction(r.record.mirror, mirrored, r.record.fps, path.join(dir, slug(r.record.mirror)));
-      packed.push({ name: r.record.mirror, frames: mirrored, fps: r.record.fps });
+      packed.push({ name: r.record.mirror, frames: mirrored, fps: r.record.fps, loop: r.record.loop !== false });
     }
   }
 
@@ -668,15 +668,17 @@ export async function makeSprites({ config, name, subject = null, judge = true, 
       json: path.join(dir, `${label}.json`),
       css: path.join(dir, `${label}.css`),
       header: path.join(dir, `${label}.h`),
+      godot: path.join(dir, `${label}.tres`),
       width: sheetImage.image.width,
       height: sheetImage.image.height,
       frame: sheetImage.frame,
-      actions: sheetImage.ranges.map((x) => ({ name: x.name, from: x.from, to: x.to, fps: x.fps })),
+      actions: sheetImage.ranges.map((x) => ({ name: x.name, from: x.from, to: x.to, fps: x.fps, loop: x.loop !== false })),
     };
     await writeFile(atlas.image, encodePNG(sheetImage.image));
     await writeFile(atlas.json, JSON.stringify(atlasJSON(sheetImage, { file: `${label}.png`, version: await toolVersion() }), null, 2));
     await writeFile(atlas.css, atlasCSS(sheetImage, { file: `${label}.png`, prefix: label, pixelated: Boolean(config.pixel) }));
     await writeFile(atlas.header, atlasHeader(sheetImage, { file: `${label}.png`, prefix, guard: `${prefix}_ATLAS_H` }));
+    await writeFile(atlas.godot, atlasGodot(sheetImage, { file: `${label}.png`, resPath: config.sprite?.resPath ? `${String(config.sprite.resPath).replace(/\/+$/, "")}/${label}.png` : null }));
   }
 
   const imageSummary = client.summary();

@@ -219,6 +219,39 @@ foreground, the themed layer and the notification icon. The Android vectors sit 
 serve older ones. Each vector icon is checked to draw like its PNG. Pixel art keeps
 PNGs on Android, which draws vectors without crisp edges.
 
+## Tiles that actually tile
+
+```bash
+onmodel tile --mark ground.png
+```
+
+A painter paints one square and never sees it repeated, so it has no way to know its right
+edge has to run into its left. Laid across a floor, that shows up as a grid of seams.
+
+So the join is measured rather than hoped for: how different the two edges are, against how
+different neighbouring columns are anywhere else in the same texture. That ratio is the
+measure, and it does not care whether the texture is busy or smooth. Noise has an enormous
+join in absolute terms and tiles perfectly, because every step across it is just as large;
+an absolute threshold would have condemned it.
+
+Where the join is too sharp it is closed, by moving both edges to meet in the middle and
+fading the correction inward. The fix is honest about what it is: it removes the **line**,
+it cannot make a brick carry on across the join. How far it had to move the pixels is
+reported, and when that is large the verdict is `forced` rather than `fixed`, because a
+texture needing that much reconciliation was never going to tile and should be painted
+again. Out comes the tile, a Godot TileSet, and the tile laid three by three, which is the
+only way to really see it.
+
+## Godot
+
+Sprites write a `SpriteFrames` resource beside the atlas, and `tile` writes a `TileSet`,
+so Godot reads them with no importer and no plugin. Neither format is from memory: Godot
+4.7.2 was asked to build each resource and save it, and these reproduce what it wrote,
+which caught details a guess gets wrong. A SpriteFrames `loop` is `1` or `0`, not `true`;
+a frame's `duration` is a multiple of the animation's speed rather than a time; and a
+TileSet cell that is not declared is empty in the editor however good the pixels are.
+Godot loads both files back and reports the right animations, speeds, loops and tiles.
+
 ## Wordmarks, set rather than drawn
 
 ```bash
@@ -537,6 +570,7 @@ their recorded size. Any failure exits with code 2, naming the file and the rule
 | `models [--filter banana]` | the models the key can use, which make images, and the price of each |
 | `generate --subject "..."` | paint a subject from the brief: candidates, keyed, measured, sized, judged |
 | `icons --name x` or `--mark file.png` | every icon Android, iOS, the web and Expo ask for, checked against the rulebook, with mask previews and vector icons when the mark traces (free) |
+| `tile --mark t.png` | check whether a texture really tiles, close the join if it does not, and write a Godot TileSet (free) |
 | `lockup --mark m.png --string "ACME" --font f.ttf` | a traced symbol and a set wordmark placed together as one combination mark (free) |
 | `text --string "ACME" --font f.ttf` | a wordmark or lettermark set from a real font's own outlines, so the letters cannot come out malformed (free) |
 | `vector --name x` or `--mark file.png` | trace a flat or pixel-art mark into an SVG with brand-named fills and an Android vector drawable, drawn back and measured; `--stroke N` traces line work as centre lines, `--tone N` traces shaded art in N tones, `--mono` cuts it to one colour (free) |

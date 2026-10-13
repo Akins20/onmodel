@@ -38,7 +38,7 @@ export function packActions(actions, { padding = 0 } = {}) {
       placements.push({ name: `${a.name}_${col}`, action: a.name, index, x, y, width: fw, height: fh, durationMs: Math.round(1000 / (a.fps ?? 8)) });
       index++;
     });
-    ranges.push({ name: a.name, from, to: index - 1, fps: a.fps ?? 8, row });
+    ranges.push({ name: a.name, from, to: index - 1, fps: a.fps ?? 8, row, loop: a.loop !== false });
   });
   return { image, placements, ranges, frame: { width: fw, height: fh }, columns, rows: actions.length };
 }
@@ -138,4 +138,62 @@ static inline int ${prefix.toLowerCase()}_frame_at(const ${Type}Action *a, float
 
 #endif
 `;
+}
+
+/**
+ * A Godot 4 SpriteFrames resource: one animation per action, each frame an AtlasTexture
+ * cut out of the sheet, so the engine reads the atlas directly with no importer and no
+ * plugin.
+ *
+ * The shape here is not from memory. Godot 4.7.2 was asked to build this resource and
+ * save it, and what it wrote is what this reproduces, which caught two things worth
+ * knowing: `loop` is written as 1 or 0 rather than true or false, and a frame's
+ * `duration` is a multiple of the animation's own speed rather than a time, so uniform
+ * frames are 1.0 and the speed carries the frames per second.
+ *
+ * Godot gives its sub-resources random ids. These are numbered instead, so the same
+ * sprites produce the same file and a diff shows what actually changed.
+ */
+export function atlasGodot(atlas, { file = "atlas.png", resPath = null } = {}) {
+  const texture = resPath ?? `res://${file}`;
+  const lines = [`[gd_resource type="SpriteFrames" format=3]`, "", `[ext_resource type="Texture2D" path="${texture}" id="1_atlas"]`, ""];
+  for (const p of atlas.placements) {
+    lines.push(`[sub_resource type="AtlasTexture" id="AtlasTexture_${p.index}"]`, `atlas = ExtResource("1_atlas")`, `region = Rect2(${p.x}, ${p.y}, ${p.width}, ${p.height})`, "");
+  }
+  const animations = atlas.ranges.map((r) => {
+    const frames = [];
+    for (let i = r.from; i <= r.to; i++) frames.push(`{\n"duration": 1.0,\n"texture": SubResource("AtlasTexture_${i}")\n}`);
+    return `{\n"frames": [${frames.join(", ")}],\n"loop": ${r.loop === false ? 0 : 1},\n"name": &"${String(r.name).replace(/"/g, "")}",\n"speed": ${Number(r.fps ?? 8).toFixed(1)}\n}`;
+  });
+  lines.push("[resource]", `animations = [${animations.join(", ")}]`, "");
+  return lines.join("\n");
+}
+
+/**
+ * A Godot 4 TileSet: an atlas source over the image, with every cell of the grid
+ * declared as a tile. Taken from what Godot 4.7.2 itself wrote, not from memory; a tile
+ * is declared by the line `<column>:<row>/0 = 0`, and leaving it out leaves the cell
+ * empty in the editor however good the pixels are.
+ */
+export function atlasTileSet(image, { file = "tiles.png", resPath = null, tileWidth = 32, tileHeight = tileWidth } = {}) {
+  const texture = resPath ?? `res://${file}`;
+  const columns = Math.max(1, Math.floor(image.width / tileWidth));
+  const rows = Math.max(1, Math.floor(image.height / tileHeight));
+  const cells = [];
+  for (let y = 0; y < rows; y++) for (let x = 0; x < columns; x++) cells.push(`${x}:${y}/0 = 0`);
+  return [
+    `[gd_resource type="TileSet" format=3]`,
+    "",
+    `[ext_resource type="Texture2D" path="${texture}" id="1_atlas"]`,
+    "",
+    `[sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_0"]`,
+    `texture = ExtResource("1_atlas")`,
+    `texture_region_size = Vector2i(${tileWidth}, ${tileHeight})`,
+    ...cells,
+    "",
+    "[resource]",
+    `tile_size = Vector2i(${tileWidth}, ${tileHeight})`,
+    `sources/0 = SubResource("TileSetAtlasSource_0")`,
+    "",
+  ].join("\n");
 }
