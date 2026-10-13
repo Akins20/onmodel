@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-10-13)
 
 - Terrain sets (`onmodel terrain`): the 16 or 47 cells a Godot TileMapLayer needs to paint
   a material rather than place tiles, composited from one seamless fill with every peering
