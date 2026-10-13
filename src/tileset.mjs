@@ -4,7 +4,8 @@ import { encodePNG } from "./png.mjs";
 import { slug } from "./generate.mjs";
 import { loadMark } from "./icons.mjs";
 import { seam, makeSeamless, tiled } from "./tile.mjs";
-import { atlasTileSet } from "./atlas.mjs";
+import { atlasTileSet, atlasCanvasTexture, GODOT_FILTER_NEAREST, GODOT_REPEAT_ENABLED } from "./atlas.mjs";
+import { normalMap, lightingStrip } from "./normal.mjs";
 
 /**
  * `onmodel tile`: a texture checked for whether it actually tiles, closed up if it does
@@ -25,7 +26,7 @@ import { atlasTileSet } from "./atlas.mjs";
 const FIX_ABOVE = 1.5;
 const FORCED_ABOVE = 8;
 
-export async function makeTileset({ config, name = null, candidate = null, markPath = null, band = null, grid = 3, fix = true, log = (s) => process.stderr.write(s) }) {
+export async function makeTileset({ config, name = null, candidate = null, markPath = null, band = null, grid = 3, fix = true, normal = false, strength = 1, blur = 1, log = (s) => process.stderr.write(s) }) {
   const { mark, file } = await loadMark({ config, name, candidate, markPath });
   const label = slug(name ?? path.basename(file).replace(/\.[^.]+$/, ""));
   const dir = path.join(config.out, label, "tile");
@@ -58,6 +59,30 @@ export async function makeTileset({ config, name = null, candidate = null, markP
     }),
   );
 
+  // A floor lit by a normal map that does not tile shows a grid however seamless its
+  // colour is, so the map is made wrapped and then held to the same join measurement.
+  let lighting = null;
+  if (normal) {
+    const made = normalMap(result.image, { strength, blur, wrap: true });
+    const joinOfNormal = seam(made.image);
+    files.normal = `${base}.normal.png`;
+    files.lit = `${base}.lit.png`;
+    files.canvas = `${base}.canvas.tres`;
+    await writeFile(files.normal, encodePNG(made.image));
+    await writeFile(files.lit, encodePNG(lightingStrip(result.image, made.image)));
+    const res = (n) => (config.tile?.resPath ? `${String(config.tile.resPath).replace(/\/+$/, "")}/${n}` : `res://${n}`);
+    await writeFile(
+      files.canvas,
+      atlasCanvasTexture({
+        diffuse: res(`${label}.png`),
+        normal: res(`${label}.normal.png`),
+        filter: config.pixel ? GODOT_FILTER_NEAREST : null,
+        repeat: GODOT_REPEAT_ENABLED,
+      }),
+    );
+    lighting = { ...made.facts, join: joinOfNormal.ratio };
+  }
+
   const facts = {
     width: result.image.width,
     height: result.image.height,
@@ -70,6 +95,7 @@ export async function makeTileset({ config, name = null, candidate = null, markP
     moved: result.moved,
     mean: result.mean,
     grid,
+    ...(lighting ? { normal: lighting } : {}),
     verdict,
   };
   const summary = { tool: "onmodel", kind: "tile", name: label, dir, mark: file, generatedAt: new Date().toISOString(), files, facts };
@@ -77,6 +103,7 @@ export async function makeTileset({ config, name = null, candidate = null, markP
 
   log(
     `  ${label}: ${facts.width}x${facts.height}, join ${before.ratio}x its own grain -> ${verdict}` +
+      (lighting ? `, normal map joins at ${lighting.join}x` : "") +
       (applied ? `, closed over ${result.band.x}px, ${Math.round(result.moved * 100)}% of pixels moved by ${result.mean} on average` : "") +
       `\n`,
   );

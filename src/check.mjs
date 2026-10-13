@@ -3,6 +3,8 @@ import path from "node:path";
 import { decodeImage } from "./image.mjs";
 import { checkIcon, STORE_TARGETS } from "./rules.mjs";
 import { icoInfo } from "./ico.mjs";
+import { seam } from "./tile.mjs";
+import { pathToPolygons } from "./vector.mjs";
 
 /**
  * A no-API gate: re-read what a run already wrote and hold it to the same rules,
@@ -29,6 +31,11 @@ const LAYOUT = [
   ["icons.json", "icons"],
   ["sprites.json", "sprites"],
   ["store.json", "store"],
+  ["vector.json", "vector"],
+  ["text.json", "text"],
+  ["lockup.json", "lockup"],
+  ["tile.json", "tile"],
+  ["normal.json", "normal"],
 ];
 
 async function exists(file) {
@@ -94,6 +101,48 @@ export async function recheckFile(file, rule = null) {
     return { file: chosen, bytes: buffer.length, error: `will not decode: ${err.message}`, checks: [{ check: "decodes", ok: false, detail: err.message }] };
   }
   return { file: chosen, bytes: buffer.length, width: image.width, height: image.height, checks: rule ? checkIcon(image, buffer.length, rule, buffer) : [] };
+}
+
+/**
+ * Re-reads an SVG and holds it to what was recorded. There is no decoder to lean on here,
+ * so the test is that every path still parses into real geometry and that the canvas is
+ * still the size the run said: a file truncated, hand-edited or re-exported by a tool that
+ * dropped a path fails both.
+ */
+export async function recheckSVG(file, { width = null, height = null } = {}) {
+  const tries = Array.isArray(file) ? file : [file];
+  let chosen = tries[0];
+  let text = null;
+  for (const f of tries) {
+    try {
+      text = await readFile(f, "utf8");
+      chosen = f;
+      break;
+    } catch {
+      // try the next place
+    }
+  }
+  if (text == null) return { file: chosen, error: "missing", checks: [{ check: "present", ok: false, detail: `not on disk under the run folder (${path.basename(chosen)})` }] };
+  const checks = [];
+  const box = /viewBox="0 0 ([\d.]+) ([\d.]+)"/.exec(text);
+  if (width != null && height != null) {
+    const got = box ? `${Number(box[1])}x${Number(box[2])}` : "no viewBox";
+    checks.push({ check: "size", ok: Boolean(box) && Number(box[1]) === width && Number(box[2]) === height, detail: `${got}; was ${width}x${height}` });
+  }
+  const ds = [...text.matchAll(/ d="([^"]*)"/g)].map((m) => m[1]);
+  checks.push({ check: "paths", ok: ds.length > 0, detail: `${ds.length} path${ds.length === 1 ? "" : "s"}` });
+  let points = 0;
+  let bad = null;
+  for (const d of ds) {
+    try {
+      for (const poly of pathToPolygons(d)) points += poly.length;
+    } catch (err) {
+      bad = err.message;
+      break;
+    }
+  }
+  checks.push({ check: "geometry", ok: !bad && points > 0, detail: bad ?? `${points} points` });
+  return { file: chosen, bytes: Buffer.byteLength(text), checks };
 }
 
 /** Finds the run directories under an output dir: the ones holding a summary, directly or in a kind's subfolder. */
@@ -195,7 +244,85 @@ export async function checkRun({ dir }) {
     results.push({ kind: "sprites", name: data.name, dir: base, files: [file] });
   }
 
+  // A traced or set mark: the SVG is the deliverable, so it is the SVG that is re-read.
+  for (const [file, kind] of [["vector.json", "vector"], ["text.json", "text"], ["lockup.json", "lockup"]]) {
+    const run = await load(file, kind);
+    if (!run?.data?.files?.svg) continue;
+    const { base, data } = run;
+    const f = data.facts ?? {};
+    const rel = String(data.files.svg).split(/[\/]/).pop();
+    const files = [{ rel, ...(await recheckSVG(candidatesFor(base, { rel, recorded: data.files.svg, summaryDir: data.dir }), { width: f.width ?? null, height: f.height ?? null })) }];
+    if (data.files.render) {
+      const r = String(data.files.render).split(/[\/]/).pop();
+      files.push({ rel: r, ...(await recheckFile(candidatesFor(base, { rel: r, recorded: data.files.render, summaryDir: data.dir }), f.width && f.height ? { width: f.width, height: f.height } : null)) });
+    }
+    results.push({ kind, name: data.name, dir: base, files });
+  }
+
+  // A tile is the one output whose correctness is a measurement rather than a format, so
+  // the measurement is taken again rather than the recorded verdict being believed.
+  const tile = await load("tile.json", "tile");
+  if (tile?.data?.files?.tile) {
+    const { base, data } = tile;
+    const f = data.facts ?? {};
+    const rel = String(data.files.tile).split(/[\/]/).pop();
+    const got = await recheckFile(candidatesFor(base, { rel, recorded: data.files.tile, summaryDir: data.dir }), f.width && f.height ? { width: f.width, height: f.height } : null);
+    if (!got.error) {
+      const buffer = await readFile(got.file);
+      const now = seam(decodeImage(buffer));
+      got.checks = [...got.checks, { check: "tiles", ok: now.ratio <= 1.5, detail: `the join is ${now.ratio}x the texture's own grain${f.verdict ? `; the run left it ${f.verdict}` : ""}` }];
+    }
+    const files = [{ rel, ...got }];
+    if (data.files.normal) {
+      const r = String(data.files.normal).split(/[\/]/).pop();
+      files.push({ rel: r, ...(await recheckNormal(candidatesFor(base, { rel: r, recorded: data.files.normal, summaryDir: data.dir }), { wrap: true })) });
+    }
+    results.push({ kind: "tile", name: data.name, dir: base, files });
+  }
+
+  const normal = await load("normal.json", "normal");
+  if (normal?.data?.files?.normal) {
+    const { base, data } = normal;
+    const f = data.facts ?? {};
+    const rel = String(data.files.normal).split(/[\/]/).pop();
+    const got = await recheckNormal(candidatesFor(base, { rel, recorded: data.files.normal, summaryDir: data.dir }), { wrap: Boolean(f.wrap) });
+    results.push({ kind: "normal", name: data.name, dir: base, files: [{ rel, ...got }] });
+  }
+
   return results;
+}
+
+/**
+ * Re-reads a normal map and checks it is still one. Every pixel must decode to something
+ * close to a unit vector pointing out of the surface; a map that has been resized with a
+ * smoothing filter, recompressed as JPEG, or had its channels swapped stops satisfying
+ * that long before it looks wrong to a person.
+ */
+export async function recheckNormal(file, { wrap = false } = {}) {
+  const got = await recheckFile(file, null);
+  if (got.error) return got;
+  const buffer = await readFile(got.file);
+  const image = decodeImage(buffer);
+  let worst = 0;
+  let backwards = 0;
+  for (let i = 0; i < image.width * image.height; i++) {
+    const p = i * 4;
+    const x = image.data[p] / 127.5 - 1;
+    const y = image.data[p + 1] / 127.5 - 1;
+    const z = image.data[p + 2] / 127.5 - 1;
+    const len = Math.hypot(x, y, z);
+    if (Math.abs(len - 1) > worst) worst = Math.abs(len - 1);
+    if (z <= 0) backwards++;
+  }
+  const checks = [
+    { check: "unit", ok: worst <= 0.12, detail: `the worst normal is ${Math.round(worst * 1000) / 1000} off unit length` },
+    { check: "outward", ok: backwards === 0, detail: backwards ? `${backwards} pixels point into the surface` : "every normal points out of the surface" },
+  ];
+  if (wrap) {
+    const now = seam(image);
+    checks.push({ check: "tiles", ok: now.ratio <= 1.5, detail: `the join is ${now.ratio}x its own grain` });
+  }
+  return { ...got, checks: [...got.checks, ...checks] };
 }
 
 /** The failures across a set of run results, each tagged with its run and file. */

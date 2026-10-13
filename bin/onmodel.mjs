@@ -49,7 +49,8 @@ Commands
          [--wrap] [--invert-y]        corners; the height comes from luminance, which is said not hidden (free)
   tile --mark t.png or --name run   check whether a texture really tiles, close the join if it does not,
        [--band 8] [--grid 3]        and write a Godot TileSet; the join is measured against the
-       [--no-fix]                   texture's own grain, so busy and smooth are judged alike (free)
+       [--no-fix] [--normal]        texture's own grain, so busy and smooth are judged alike;
+                                    --normal derives a tiling normal map and a CanvasTexture too (free)
   lockup --string "ACME" --font f.ttf  a traced symbol and a set wordmark placed together as one mark
          --mark logo.png or --name run  [--layout beside|above] [--px 128] [--gap 0.5] [--symbol 1.2]
                                     the symbol is sized and centred on the cap height, not the em (free)
@@ -359,6 +360,9 @@ async function main() {
         band: num(flags.band, "band", 1, 512),
         grid: num(flags.grid, "grid", 2, 8) ?? 3,
         fix: !flags["no-fix"],
+        normal: Boolean(flags.normal),
+        strength: num(flags.strength, "strength", 0.05, 10) ?? 1,
+        blur: num(flags.blur, "blur", 0, 32) ?? 1,
       });
       const f = result.facts;
       const said = {
@@ -370,6 +374,7 @@ async function main() {
       const lines = [
         `${result.name} tile in ${result.dir}: ${f.verdict} (${f.width}x${f.height})`,
         said,
+        ...(f.normal ? [`a normal map was derived too, joining at ${f.normal.join}x the grain, with a Godot CanvasTexture binding it to the colour`] : []),
         `look at ${path.basename(result.files.tiled)}: the tile laid ${f.grid} by ${f.grid}, which is the only way to really see it`,
       ];
       emit(config, lines.join("\n"), { command: "tile", ...result });
