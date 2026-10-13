@@ -118,3 +118,29 @@ test("the Godot TileSet is the shape Godot itself writes", () => {
   assert.equal((single.match(/\/0 = 0/g) ?? []).length, 1);
   assert.match(atlasTileSet({ width: 32, height: 32 }, { file: "t.png", tileWidth: 32, resPath: "res://art/t.png" }), /path="res:\/\/art\/t\.png"/);
 });
+
+test("a Godot import preset is written as params only, and says what the art is", async () => {
+  const { godotImport } = await import("../src/atlas.mjs");
+  // Godot 4.7.2 was given a params-only file and asked what it made of it: it filled in
+  // the uid and the content hash itself, kept every setting given and left the rest at
+  // their defaults. So the preset can be written without reproducing engine internals.
+  const smooth = godotImport({});
+  assert.match(smooth, /^\[params\]/);
+  assert.ok(!/\[remap\]/.test(smooth), "the remap block is Godot's to write, not ours");
+  assert.ok(!/uid:\/\//.test(smooth), "and so is the uid");
+
+  // The trap worth closing: left at its default a 2D texture that anything 3D touches is
+  // silently re-imported as VRAM-compressed, and 2D art never recovers from it.
+  assert.match(smooth, /detect_3d\/compress_to=0/);
+  assert.match(smooth, /compress\/mode=0/, "lossless, so edges survive");
+  assert.match(smooth, /mipmaps\/generate=false/);
+  assert.match(smooth, /process\/fix_alpha_border=true/, "smooth art wants its edges bled");
+
+  // Pixel art is not filtered, so bleeding its edge is exactly wrong.
+  assert.match(godotImport({ pixel: true }), /process\/fix_alpha_border=false/);
+
+  const normal = godotImport({ normalMap: true });
+  assert.match(normal, /compress\/normal_map=1/);
+  assert.match(normal, /process\/normal_map_invert_y=false/, "Godot wants Y up, which is what onmodel writes");
+  assert.ok(!/normal_map=1/.test(smooth), "ordinary art is not flagged as a normal map");
+});

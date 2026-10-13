@@ -126,6 +126,7 @@ export function normalMap(image, { strength = 1, blur = 1, wrap = false, invertY
   let flat = 0;
   let maxUnit = 0;
   let maxSlope = 0;
+  let seen = 0;
   for (let i = 0; i < w * h; i++) {
     const dx = gx[i] * strength * 8;
     const dy = gy[i] * strength * 8;
@@ -141,6 +142,11 @@ export function normalMap(image, { strength = 1, blur = 1, wrap = false, invertY
     data[p + 1] = enc(invertY ? -nyUp : nyUp);
     data[p + 2] = enc(nz);
     data[p + 3] = 255;
+    // Only where the art actually is. A sprite is mostly transparent padding, which
+    // encodes perfectly flat, and averaging that in made every statistic look excellent
+    // in proportion to how much empty space the frame had.
+    if (!inside[i]) continue;
+    seen++;
     if (data[p] === 128 && data[p + 1] === 128 && data[p + 2] === 255) flat++;
     const back = Math.hypot(dec(data[p]), dec(data[p + 1]), dec(data[p + 2]));
     if (Math.abs(back - 1) > maxUnit) maxUnit = Math.abs(back - 1);
@@ -153,6 +159,7 @@ export function normalMap(image, { strength = 1, blur = 1, wrap = false, invertY
   let gradErr = 0;
   let gradMax = 0;
   for (let i = 0; i < w * h; i++) {
+    if (!inside[i]) continue;
     const p = i * 4;
     const nx = dec(data[p]);
     const nyUp = invertY ? -dec(data[p + 1]) : dec(data[p + 1]);
@@ -183,11 +190,14 @@ export function normalMap(image, { strength = 1, blur = 1, wrap = false, invertY
       blur: Math.max(0, Math.round(blur)),
       wrap,
       green: invertY ? "down (DirectX)" : "up (OpenGL)",
-      flatShare: r3(flat / (w * h)),
+      flatShare: r3(flat / Math.max(1, seen)),
       unitError: r3(maxUnit),
-      gradientError: r3(gradErr / (w * h)),
+      gradientError: r3(gradErr / Math.max(1, seen)),
       gradientWorst: r3(gradMax),
       maxSlope: r3(maxSlope),
+      // The steepest face in the map, as an angle, which is the form anyone can picture:
+      // 45 degrees is a wall, 5 degrees is a surface you would have to look for.
+      steepest: r3((Math.atan(maxSlope) * 180) / Math.PI),
       grainShare: coarseSum > 0 ? r3(Math.max(0, 1 - coarseSum / Math.max(1e-6, fineSum))) : 0,
       visible,
     },

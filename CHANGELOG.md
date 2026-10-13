@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+- Normal maps (`onmodel normal`), derived from the art rather than painted, so a 2D light
+  knows which way each pixel faces. A painted sprite has no geometry, so the height is
+  invented from luminance, which is an assumption and is wrong wherever colour and depth
+  are unrelated: dark paint becomes a dent. That is reported, not hidden, along with how
+  much of the art's variation was fine enough to come out as noise. What can be proven is:
+  unit-length normals, flat art encoding exactly flat, and the gradient decoded back out
+  of the written pixels and compared with the one it was made from. The decisive check is
+  a picture, since no number can say bumps read as bumps rather than dents, so every run
+  writes the art lit from four corners; a dome lit from each corner in turn is brightest
+  at that corner, held by a test. Godot wants X+ Y+ Z+, the OpenGL convention, which is
+  the default, with `--invert-y` for the other.
+- Collision and occlusion shapes (`onmodel shape`), traced from the art's own silhouette
+  and simplified to a point budget, since a body of two thousand points is a performance
+  bug in the shape of an answer. A body is what the art ENCLOSES, not only what it inks:
+  measured against the ink alone, a correct shape for a drawn mug reported claiming four
+  times its own area as empty space. The two ways simplifying goes wrong are reported
+  separately because one is much worse: missing part of the sprite lets a sword through a
+  shoulder, claiming empty space makes the player collide with nothing. Comparing areas
+  hides the difference, so the polygon is drawn back and compared pixel by pixel. The
+  budget is met by simplifying harder, never by cutting the tail off a loop.
+- One scale for the whole character, not one for each action. Scaling each action to fill
+  its own cell was hiding the very thing this tool exists to catch: an action painted
+  larger than the rest was quietly shrunk to fit, so the character changed size the moment
+  it jumped and every measurement still passed. The scale is taken across every frame of
+  every action now, and how far the actions differ in height at that one scale is reported
+  instead of being normalised away.
+- The gate covers the five commands nothing was checking: vector, text, lockup, tile and
+  normal. Two get a real re-measurement rather than a format check, because their
+  correctness IS a measurement. A tile's join is taken again from the pixels on disk, so a
+  re-export that brightens one edge is caught even though the file still decodes at the
+  right size. A normal map is re-derived from its own pixels: every texel must decode close
+  to a unit vector pointing out of the surface, which a resize, a JPEG round trip or a
+  channel swap stops satisfying long before it looks wrong to a person.
+- A `.import` preset is written beside each PNG. Godot does not load a PNG, it loads the
+  texture its importer made, and a perfect PNG imported wrong looks exactly like a bad one.
+  Only `[params]` is written: Godot 4.7.2 was asked what it does with a params-only file
+  and it fills in the uid and content hash itself while keeping every setting given. That
+  closes the trap where 2D art touched by anything 3D is silently VRAM-compressed.
+- An `AtlasTexture` may take a `CanvasTexture` as its atlas, which Godot confirmed by
+  loading the chain back, so a sprite's normal map and its nearest filtering now travel
+  inside the SpriteFrames resource. This is the only place filtering can travel with the
+  art, since Godot 4 has no filter setting in a `.import` at all.
+- `ratioAfter` in a tile's facts is renamed `ratioAfterByConstruction`, because after the
+  fix the two edges are identical by construction and the number was reading as evidence
+  when it was a tautology. A tile's transparency is reported too, since a texture with
+  holes is a decal and not a floor.
+- Normal map statistics count only where the art is. A sprite is mostly transparent
+  padding, which encodes perfectly flat, so averaging it in made every figure look
+  excellent in proportion to how much empty space the frame happened to have.
 - Godot reads what onmodel writes. `sprites` now writes a `SpriteFrames` resource beside
   the atlas and the new `tile` writes a `TileSet`, so neither needs an importer or a
   plugin. Neither format is from memory: Godot 4.7.2 was asked to build each resource and

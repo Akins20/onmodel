@@ -121,8 +121,22 @@ test("what is not visible does not become a cliff round the edge", () => {
   const { field, mean, visible } = heightField(sprite);
   assert.ok(visible > 1000 && visible < W * W);
   assert.ok(Math.abs(field[0] - mean) < 1e-6, "outside takes the average, not zero");
+  // And the statistics count only where the art is. A sprite is mostly padding, which
+  // encodes perfectly flat, so averaging it in made every figure look excellent in
+  // proportion to how much empty space the frame happened to have.
   const got = normalMap(sprite);
-  assert.ok(got.facts.flatShare > 0.5, "most of the frame stays flat");
+  assert.ok(got.facts.visible < W * W * 0.6, "most of the frame is empty");
+  assert.ok(got.facts.flatShare > 0.9, "and the disc itself is one flat colour, so its normals are flat");
+
+  const shaded = normalMap(paint(W, W, (x, y) => {
+    const r = Math.hypot(x - W / 2, y - W / 2);
+    if (r >= 20) return [0, 0, 0, 0];
+    const v = 60 + 180 * Math.sqrt(1 - (r / 20) ** 2);
+    return [v, v, v, 255];
+  }));
+  assert.ok(shaded.facts.flatShare < 0.1, `a shaded sprite is not flat: ${shaded.facts.flatShare}`);
+  // The steepest face as an angle, which is the form anyone can picture.
+  assert.ok(shaded.facts.steepest > 5 && shaded.facts.steepest < 80, `steepest ${shaded.facts.steepest} degrees`);
 });
 
 test("blurring more leaves less for the map to catch", () => {

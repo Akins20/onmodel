@@ -76,13 +76,24 @@ read its facts.
    and the `head.html` tags in the page head; for Expo, copy `expo/*.png` to
    `./assets` and merge `expo/app.json`. Commit the icons with the mark that made them.
 
+## Lighting and bodies
+`onmodel normal --mark <art.png>` derives a normal map so a 2D light works, and writes the
+art lit from four corners. LOOK AT THAT STRIP: no number can tell you the bumps read as
+bumps rather than dents. The height is guessed from luminance, so dark paint becomes a
+dent; the run says how much of the art was too fine to survive, and `--blur` is the dial.
+`onmodel shape --mark <art.png> --points 16` traces the collision body. Read the two
+numbers apart: a shape that MISSES art lets things through the sprite, one that CLAIMS
+EMPTY SPACE makes the player collide with nothing. Raise `--points` for either.
+
 ## Tiles and Godot
 A texture for a floor or a wall must tile, and the painter cannot tell whether it does.
 Run `onmodel tile --mark <t.png>` on it: the join is measured against the texture's own
 grain, closed if it is too sharp, and the tile written out laid three by three. Look at
 that grid, not the number. A verdict of `forced` means the fix had to work hard and will
-show, so paint it again rather than ship it. Sprites and tiles both write Godot resources
-(`SpriteFrames` and `TileSet`) beside their images, which Godot opens with no importer.
+show, so paint it again rather than ship it. Every Godot resource is written beside the art and opens with no importer: `SpriteFrames`,
+`TileSet` (with collision and occlusion when asked), `CanvasTexture`, `OccluderPolygon2D`
+and a `.import` preset per PNG. Point them at the right place in the project with
+`sprite.resPath` or `tile.resPath` in the config, or the paths assume the project root.
 
 ## Wordmarks and lettermarks
 Never ask the painter for letters. It gets them wrong, and nothing onmodel measures can

@@ -8,7 +8,7 @@ import { chooseKey, keyOut, quantize, hardenAlpha, fillBackground, blit, resize,
 import { toHex } from "./color.mjs";
 import { sliceStrip, placeFrames, mirror } from "./strip.mjs";
 import { measureAction, paletteDelta, normalisePair, iou, silhouette, HARD_FLAGS } from "./measure.mjs";
-import { packActions, atlasJSON, atlasCSS, atlasHeader, atlasGodot, GODOT_FILTER_NEAREST } from "./atlas.mjs";
+import { packActions, atlasJSON, atlasCSS, atlasHeader, atlasGodot, godotImport, GODOT_FILTER_NEAREST } from "./atlas.mjs";
 import { normalMap } from "./normal.mjs";
 import { encodeAPNG, encodeGIF } from "./anim.mjs";
 import { generate, preambleParts, slug } from "./generate.mjs";
@@ -530,13 +530,21 @@ export async function makeSprites({ config, name, subject = null, judge = true, 
     if (ran.record.stopped) break;
   }
 
-  // Place every finished action at its own shared scale, then one palette for the
-  // whole sprite in pixel mode, so no colour flickers between frames or actions.
+  // ONE scale for the whole character, not one for each action, then one palette for the
+  // whole sprite in pixel mode, so neither size nor colour shifts between actions.
+  //
+  // Scaling each action to fill its own cell was hiding the very thing this tool exists
+  // to catch: an action painted larger than the others was quietly shrunk to fit, so the
+  // character changed size the moment it jumped and every measurement still passed. The
+  // scale is now taken across every frame of every action, and how much each action
+  // differs in height at that one scale is recorded instead of being normalised away.
   const finished = results.filter((r) => r.frames);
+  const oneScale = finished.length ? actionScale(finished.flatMap((r) => r.frames), { width: cell.width, height: cell.height, fill: sp.fill }) : 1;
   const placeRaw = (r) => {
-    const scale = actionScale(r.frames, { width: cell.width, height: cell.height, fill: sp.fill });
-    r.record.scale = round(scale, 4);
-    return placeFrames(r.frames, { width: cell.width, height: cell.height, fill: sp.fill, anchor: sp.anchor, filter: config.pixel ? "box" : "auto", scale });
+    r.record.scale = round(oneScale, 4);
+    const heights = r.frames.map((f) => f.height).sort((a, b) => a - b);
+    r.record.medianHeight = heights[Math.floor(heights.length / 2)] ?? 0;
+    return placeFrames(r.frames, { width: cell.width, height: cell.height, fill: sp.fill, anchor: sp.anchor, filter: config.pixel ? "box" : "auto", scale: oneScale });
   };
   for (const r of finished) r.placed = placeRaw(r);
   let palette = null;
@@ -677,6 +685,7 @@ export async function makeSprites({ config, name, subject = null, judge = true, 
       actions: sheetImage.ranges.map((x) => ({ name: x.name, from: x.from, to: x.to, fps: x.fps, loop: x.loop !== false })),
     };
     await writeFile(atlas.image, encodePNG(sheetImage.image));
+    await writeFile(`${atlas.image}.import`, godotImport({ pixel: Boolean(config.pixel) }));
     await writeFile(atlas.json, JSON.stringify(atlasJSON(sheetImage, { file: `${label}.png`, version: await toolVersion() }), null, 2));
     await writeFile(atlas.css, atlasCSS(sheetImage, { file: `${label}.png`, prefix: label, pixelated: Boolean(config.pixel) }));
     await writeFile(atlas.header, atlasHeader(sheetImage, { file: `${label}.png`, prefix, guard: `${prefix}_ATLAS_H` }));
@@ -685,6 +694,7 @@ export async function makeSprites({ config, name, subject = null, judge = true, 
       // The whole sheet at once, so every frame's lighting agrees with its neighbours.
       const lit = normalMap(sheetImage.image, { strength: config.sprite.normalStrength ?? 1, blur: config.pixel ? 0 : 1 });
       await writeFile(atlas.normal, encodePNG(lit.image));
+      await writeFile(`${atlas.normal}.import`, godotImport({ pixel: Boolean(config.pixel), normalMap: true }));
       atlas.normalFacts = lit.facts;
     }
     await writeFile(
@@ -714,6 +724,15 @@ export async function makeSprites({ config, name, subject = null, judge = true, 
     palette,
     sheet: sheet ? { file: sheet.file, pick: sheet.pick, source: sheet.source, views: sheet.views } : null,
     actions: results.map((r) => r.record),
+    // Every action now draws at one scale, so if one of them was painted bigger than the
+    // rest the character really is bigger in it. That used to be scaled away silently;
+    // here it is a number. Anything much over 1 means the painter drifted on that action.
+    sizeSpread: (() => {
+      const hs = finished.map((r) => r.record.medianHeight).filter((v) => v > 0).sort((a, b) => a - b);
+      if (hs.length < 2) return null;
+      const mid = hs[Math.floor(hs.length / 2)];
+      return { smallest: hs[0], largest: hs[hs.length - 1], median: mid, ratio: round(hs[hs.length - 1] / Math.max(1, hs[0]), 3) };
+    })(),
     atlas,
     stopped: results.find((r) => r.record.stopped)?.record.stopped ?? null,
     generatedAt: new Date().toISOString(),

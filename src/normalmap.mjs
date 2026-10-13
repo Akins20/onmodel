@@ -5,7 +5,7 @@ import { slug } from "./generate.mjs";
 import { loadMark } from "./icons.mjs";
 import { normalMap, lightingStrip } from "./normal.mjs";
 import { seam } from "./tile.mjs";
-import { atlasCanvasTexture, GODOT_FILTER_NEAREST, GODOT_REPEAT_ENABLED } from "./atlas.mjs";
+import { atlasCanvasTexture, godotImport, GODOT_FILTER_NEAREST, GODOT_REPEAT_ENABLED } from "./atlas.mjs";
 
 /**
  * `onmodel normal`: a normal map derived from the art, so a 2D light knows which way each
@@ -57,8 +57,12 @@ export async function makeNormalMap({
   };
   const res = (n) => (config.normal?.resPath ? `${String(config.normal.resPath).replace(/\/+$/, "")}/${n}` : `res://${n}`);
   await writeFile(files.normal, encodePNG(made.image));
+  files.normalImport = `${files.normal}.import`;
+  await writeFile(files.normalImport, godotImport({ pixel: Boolean(config.pixel), normalMap: true }));
   await writeFile(files.lit, encodePNG(strip));
   await writeFile(files.source, encodePNG(mark));
+  files.sourceImport = `${files.source}.import`;
+  await writeFile(files.sourceImport, godotImport({ pixel: Boolean(config.pixel) }));
   await writeFile(
     files.canvas,
     atlasCanvasTexture({

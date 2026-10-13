@@ -4,7 +4,7 @@ import { encodePNG } from "./png.mjs";
 import { slug } from "./generate.mjs";
 import { loadMark } from "./icons.mjs";
 import { seam, makeSeamless, tiled, transparency } from "./tile.mjs";
-import { atlasTileSet, atlasCanvasTexture, GODOT_FILTER_NEAREST, GODOT_REPEAT_ENABLED } from "./atlas.mjs";
+import { atlasTileSet, atlasCanvasTexture, godotImport, GODOT_FILTER_NEAREST, GODOT_REPEAT_ENABLED } from "./atlas.mjs";
 import { normalMap, lightingStrip } from "./normal.mjs";
 import { silhouettePolygons, shapeFit } from "./silhouette.mjs";
 
@@ -49,6 +49,8 @@ export async function makeTileset({ config, name = null, candidate = null, markP
     tileset: `${base}.tres`,
   };
   await writeFile(files.tile, encodePNG(result.image));
+  files.tileImport = `${files.tile}.import`;
+  await writeFile(files.tileImport, godotImport({ pixel: Boolean(config.pixel) }));
   await writeFile(files.tiled, encodePNG(tiled(result.image, grid)));
   await writeFile(files.source, encodePNG(mark));
   // The tile's own shape as a body. A solid tile gives the square, which is right and
@@ -80,6 +82,8 @@ export async function makeTileset({ config, name = null, candidate = null, markP
     files.lit = `${base}.lit.png`;
     files.canvas = `${base}.canvas.tres`;
     await writeFile(files.normal, encodePNG(made.image));
+    files.normalImport = `${files.normal}.import`;
+    await writeFile(files.normalImport, godotImport({ pixel: Boolean(config.pixel), normalMap: true }));
     await writeFile(files.lit, encodePNG(lightingStrip(result.image, made.image)));
     const res = (n) => (config.tile?.resPath ? `${String(config.tile.resPath).replace(/\/+$/, "")}/${n}` : `res://${n}`);
     await writeFile(

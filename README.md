@@ -219,6 +219,56 @@ foreground, the themed layer and the notification icon. The Android vectors sit 
 serve older ones. Each vector icon is checked to draw like its PNG. Pixel art keeps
 PNGs on Android, which draws vectors without crisp edges.
 
+## Lighting, bodies and Godot
+
+```bash
+onmodel normal --mark art.png              # a normal map, so a 2D light knows which way pixels face
+onmodel shape  --mark art.png --points 16  # the collision body, traced from the silhouette
+onmodel tile   --mark ground.png --normal --collision
+```
+
+**Normal maps** are derived, not painted. The honest part governs it: a painted sprite has
+no geometry, so the height has to be invented, and the invention is luminance. Dark paint
+on a flat wall becomes a groove in the wall. That is inherent, it is said rather than
+hidden, and each run reports how much of the art's variation was fine enough to come out
+as noise. What can be proven is: the normals are unit length, flat art encodes exactly
+flat, and the gradient is decoded back out of the written pixels and compared with the one
+it was made from. For a tile the map is held to the same join measurement as the colour,
+since a seamless tile lit by a seamed normal map still shows a grid.
+
+The decisive check is a picture, because no number can say bumps read as bumps rather than
+dents, which is exactly what a flipped green channel does. Every run writes the art lit
+from four corners.
+
+**Collision and occlusion shapes** are traced from the art's own silhouette, where a body
+is what the art *encloses*, not only what it inks: outline art is ink on the strokes and
+nothing in the middle. Simplifying goes wrong in two directions and they are reported
+separately, because one is much worse. A shape that misses part of the sprite lets a sword
+through a shoulder; one that claims empty space makes the player collide with nothing.
+Comparing areas hides the difference, so the polygon is drawn back and set against the art
+pixel by pixel.
+
+**Godot** reads all of it with no importer and no plugin: `SpriteFrames` for sprites,
+`TileSet` for tiles with collision and occlusion baked in, `CanvasTexture` binding colour
+to normal, `OccluderPolygon2D`, and a `.import` preset beside each PNG. None of these
+formats came from memory. Godot 4.7.2 was asked to build each resource and save it, and
+these reproduce what it wrote, which caught what a guess gets wrong:
+
+- a SpriteFrames `loop` is `1` or `0`, not `true`;
+- a frame's `duration` is a multiple of the animation's speed, not a time;
+- a TileSet cell that is not declared is empty however good the pixels are;
+- a tile's collision points are measured from the tile's **centre**, not its corner;
+- `texture_filter` 1 is nearest and `texture_repeat` 2 is enabled, not 1;
+- an `AtlasTexture` may take a `CanvasTexture` as its atlas, so a sprite's lighting and its
+  nearest filtering travel inside the resource, which matters because Godot 4 has no filter
+  setting in a `.import` at all;
+- a `.import` written with only `[params]` works: Godot fills in the uid and the content
+  hash itself and keeps every setting given, so `detect_3d/compress_to=0` can close the
+  trap where 2D art touched by anything 3D is silently VRAM-compressed.
+
+Godot loads every generated file back and reports the right animations, speeds, loops,
+regions, tiles, layers and polygons.
+
 ## Tiles that actually tile
 
 ```bash
@@ -570,6 +620,8 @@ their recorded size. Any failure exits with code 2, naming the file and the rule
 | `models [--filter banana]` | the models the key can use, which make images, and the price of each |
 | `generate --subject "..."` | paint a subject from the brief: candidates, keyed, measured, sized, judged |
 | `icons --name x` or `--mark file.png` | every icon Android, iOS, the web and Expo ask for, checked against the rulebook, with mask previews and vector icons when the mark traces (free) |
+| `normal --mark art.png` | a normal map derived from the art, with the Godot CanvasTexture and the art lit from four corners (free) |
+| `shape --mark art.png` | the collision and occlusion shape traced from the silhouette, simplified to a budget (free) |
 | `tile --mark t.png` | check whether a texture really tiles, close the join if it does not, and write a Godot TileSet (free) |
 | `lockup --mark m.png --string "ACME" --font f.ttf` | a traced symbol and a set wordmark placed together as one combination mark (free) |
 | `text --string "ACME" --font f.ttf` | a wordmark or lettermark set from a real font's own outlines, so the letters cannot come out malformed (free) |

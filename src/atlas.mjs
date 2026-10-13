@@ -256,3 +256,36 @@ export function atlasCanvasTexture({ diffuse, normal = null, specular = null, fi
 
 export const GODOT_FILTER_NEAREST = 1;
 export const GODOT_REPEAT_ENABLED = 2;
+
+/**
+ * A Godot import preset for a PNG, written beside it as `<file>.png.import`.
+ *
+ * Godot does not load a PNG, it loads the texture its importer made, and those settings
+ * decide whether pixel art is blurred, whether it is quietly VRAM-compressed, and whether
+ * a normal map is treated as one. A perfect PNG imported wrong looks exactly like a bad
+ * PNG, which is the sort of failure this tool exists to stop.
+ *
+ * Only `[params]` is written. The `[remap]` block holds a uid and a content hash that only
+ * Godot can compute, and Godot 4.7.2 was asked what it does with a params-only file: it
+ * fills in the rest, keeps every setting given, and leaves the defaults alone. So the
+ * preset can be written without reproducing anything that belongs to the engine.
+ */
+export function godotImport({ pixel = false, normalMap = false } = {}) {
+  const params = [
+    // Lossless for art. The default can re-encode, and once pixel art has been through a
+    // lossy pass no amount of care downstream brings the edges back.
+    "compress/mode=0",
+    // Mipmaps are for art seen at many sizes in 3D; on a 2D sprite they only soften it.
+    "mipmaps/generate=false",
+    // Bleeding the edge colour into transparency stops a halo when the art is filtered,
+    // and is exactly wrong for pixel art, which is not filtered.
+    `process/fix_alpha_border=${pixel ? "false" : "true"}`,
+    // The trap worth closing: left at its default, a 2D texture that is ever touched by
+    // anything 3D is silently re-imported as VRAM-compressed, and 2D art never recovers.
+    "detect_3d/compress_to=0",
+  ];
+  if (normalMap) {
+    params.push("compress/normal_map=1", "process/normal_map_invert_y=false");
+  }
+  return `[params]\n\n${params.join("\n")}\n`;
+}
