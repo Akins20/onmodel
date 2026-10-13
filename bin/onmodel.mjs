@@ -14,6 +14,7 @@ import { makeStore } from "../src/store.mjs";
 import { makeText } from "../src/text.mjs";
 import { makeLockup } from "../src/lockup.mjs";
 import { makeTileset } from "../src/tileset.mjs";
+import { makeNormalMap } from "../src/normalmap.mjs";
 import { makeVector } from "../src/vectorize.mjs";
 import { checkRun, findRuns, failuresOf } from "../src/check.mjs";
 
@@ -43,6 +44,9 @@ Commands
   text --string "ACME" --font f.ttf  a wordmark or lettermark set from a real font, not drawn: the letters are
        [--name slug] [--px 128]      the type designer's own outlines, so they cannot come out malformed
        [--tracking 20] [--colour #hex] [--no-kerning]                                  (free)
+  normal --mark art.png or --name run  a normal map derived from the art so a 2D light knows which way each
+         [--strength 1] [--blur 1]    pixel faces, with the Godot CanvasTexture and the art lit from four
+         [--wrap] [--invert-y]        corners; the height comes from luminance, which is said not hidden (free)
   tile --mark t.png or --name run   check whether a texture really tiles, close the join if it does not,
        [--band 8] [--grid 3]        and write a Godot TileSet; the join is measured against the
        [--no-fix]                   texture's own grain, so busy and smooth are judged alike (free)
@@ -123,6 +127,11 @@ const OPTIONS = {
   band: { type: "string" },
   grid: { type: "string" },
   "no-fix": { type: "boolean" },
+  strength: { type: "string" },
+  blur: { type: "string" },
+  wrap: { type: "boolean" },
+  "invert-y": { type: "boolean" },
+  normal: { type: "boolean" },
   noise: { type: "string" },
   change: { type: "string" },
   in: { type: "string" },
@@ -299,6 +308,39 @@ async function main() {
       ];
       emit(config, lines.join("\n"), { command: "lockup", ...result });
       if (f.verdict === "incomplete" || f.verdict === "poor") process.exitCode = 2;
+      return;
+    }
+    case "normal": {
+      const config = await loadConfig(flags);
+      const num = (v, what, lo, hi) => {
+        if (v == null) return null;
+        const n = Number(v);
+        if (!Number.isFinite(n) || n < lo || n > hi) throw new Error(`--${what} must be a number between ${lo} and ${hi}`);
+        return n;
+      };
+      const result = await makeNormalMap({
+        config,
+        name: flags.name ?? null,
+        candidate: flags.candidate ?? null,
+        markPath: flags.mark ?? null,
+        strength: num(flags.strength, "strength", 0.05, 10) ?? 1,
+        blur: num(flags.blur, "blur", 0, 32) ?? 1,
+        wrap: Boolean(flags.wrap),
+        invertY: Boolean(flags["invert-y"]),
+      });
+      const f = result.facts;
+      const lines = [
+        `${result.name} normal map in ${result.dir}: ${f.verdict} (${f.width}x${f.height}, green ${f.green})`,
+        f.verdict === "flat"
+          ? "the art has almost no light and shade in it, so the map is nearly featureless and a Light2D will do nothing with it"
+          : f.verdict === "seams"
+            ? `the map does not tile (join ${f.join}x the grain), so the lighting will show a grid even though the colour does not`
+            : `the encoding is faithful to ${f.gradientError} on average${f.join ? `, and it tiles (join ${f.join}x the grain)` : ""}`,
+        `the height came from luminance, because a painted sprite has no geometry: dark paint becomes a dent, and ${Math.round(f.grainShare * 100)}% of this art's variation was finer than the blur`,
+        `look at ${path.basename(result.files.lit)}: the art lit from four corners, which is the only way to see that bumps read as bumps`,
+      ];
+      emit(config, lines.join("\n"), { command: "normal", ...result });
+      if (f.verdict !== "derived") process.exitCode = 2;
       return;
     }
     case "tile": {

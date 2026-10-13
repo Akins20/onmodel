@@ -197,3 +197,33 @@ export function atlasTileSet(image, { file = "tiles.png", resPath = null, tileWi
     "",
   ].join("\n");
 }
+
+/**
+ * A Godot 4 CanvasTexture: the colour and the normal map bound together, which is how a
+ * Light2D is told which way each pixel of a sprite faces. Taken from what Godot 4.7.2
+ * wrote, including the enum values, which are the part a guess gets wrong:
+ * `texture_filter` 1 is nearest and `texture_repeat` 2 is enabled, not 1.
+ */
+export function atlasCanvasTexture({ diffuse, normal = null, specular = null, filter = null, repeat = null, shininess = null } = {}) {
+  const ext = [`[ext_resource type="Texture2D" path="${diffuse}" id="1_diffuse"]`];
+  const body = [`diffuse_texture = ExtResource("1_diffuse")`];
+  let n = 2;
+  if (normal) {
+    ext.push(`[ext_resource type="Texture2D" path="${normal}" id="${n}_normal"]`);
+    body.push(`normal_texture = ExtResource("${n}_normal")`);
+    n++;
+  }
+  if (specular) {
+    ext.push(`[ext_resource type="Texture2D" path="${specular}" id="${n}_specular"]`);
+    body.push(`specular_texture = ExtResource("${n}_specular")`);
+    n++;
+  }
+  if (shininess != null) body.push(`specular_shininess = ${Number(shininess).toFixed(1)}`);
+  // 1 is nearest, which pixel art needs; 2 is repeat enabled, which a tile needs.
+  if (filter != null) body.push(`texture_filter = ${filter}`);
+  if (repeat != null) body.push(`texture_repeat = ${repeat}`);
+  return [`[gd_resource type="CanvasTexture" format=3]`, "", ...ext, "", "[resource]", ...body, ""].join("\n");
+}
+
+export const GODOT_FILTER_NEAREST = 1;
+export const GODOT_REPEAT_ENABLED = 2;
