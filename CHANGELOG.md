@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- CFF OpenType fonts (.otf) are read, so `text`, `lockup` and `bitmapfont` take them as well
+  as TrueType; they used to be named and refused. The Type 2 charstrings are run by an
+  interpreter of their own: every drawing operator, local and global subroutines with their
+  bias, hint and counter masks skipped by the stem count (implied vstems included), widths
+  dropped in each position a charstring may carry one, the four flex operators, seac accents,
+  the arithmetic operators, name-keyed and CID-keyed fonts (FDSelect formats 0, 3 and 4) and
+  CFF2 at its default instance (vsindex and blend keep the values and drop the deltas). Checked
+  against FreeType through Godot 4.7.2's TextServer on eight Adobe fonts, 8,770 glyphs: every
+  bound and glyph id matched, and the only outline differences were FreeType's own half-pixel
+  hinting shifts on hintless symbols. Charstring units are the head table's, as FreeType reads
+  them: a font matrix is honoured for the shape it adds (an oblique, an aspect) and not for its
+  scale, and a CID font dict's matrix is combined with the top dict's. A malformed font is refused
+  with a message rather than hanging: an index past the end of its table, a charstring that runs
+  away through its subroutines or overflows its stack, a glyph drawn far outside its em. The font
+  object gained `glyphPath` and `glyphBounds`, which bitmap fonts and wordmarks now use for either
+  flavour; `contoursOf` stays for TrueType.
+
 ## 0.6.0 (2026-10-14)
 
 - Trimmed sprite atlases (`sprites --trim`, and `onmodel atlas --trim` to pack an existing run

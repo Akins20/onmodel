@@ -94,7 +94,7 @@ resized) and CSS. A generated panel is far bigger than UI needs: pass `--scale 0
 If it refuses because something in the middle splits the band, tell the user to put the
 emblem on top as its own image; do not force `--insets` through it.
 
-`onmodel bitmapfont --font f.ttf --px 16` sets a real font into a `.fnt` and page (and a `.xml`
+`onmodel bitmapfont --font f.ttf --px 16` sets a real font (TrueType or CFF .otf) into a `.fnt` and page (and a `.xml`
 copy, the form Phaser loads). For pixel
 art add `--mono`; if it says a piece of a letter was lost, try a bigger `--px` before a lower
 `--cover`. In Godot, set the font size to the `--px` it was made at (a whole multiple for a
@@ -122,14 +122,14 @@ and a `.import` preset per PNG. Point them at the right place in the project wit
 ## Wordmarks and lettermarks
 Never ask the painter for letters. It gets them wrong, and nothing onmodel measures can
 tell a good R from a bad one, so a mangled word comes back reported as a perfect match.
-Set them instead: `onmodel text --string "ACME" --font <file.ttf> --px 128`, with
+Set them instead: `onmodel text --string "ACME" --font <file.ttf or .otf> --px 128`, with
 `--tracking` for letter spacing and `--colour` to pick from the brief. The letters are
 the font's own outlines, so the verdict is "exact" unless a character is not in the font
 or is in it and draws nothing, both of which it names. For a combination mark, set the
 wordmark this way and generate only the symbol beside it.
 
 ## Combination marks
-`onmodel lockup --mark <logo.png> --string "ACME" --font <file.ttf>` places a traced
+`onmodel lockup --mark <logo.png> --string "ACME" --font <file.ttf or .otf>` places a traced
 symbol and a set wordmark together, `--layout beside` or `above`. The symbol's height is
 given in cap heights (`--symbol`, 1.2 by default) and so is the gap (`--gap`, 0.5), so
 both read the same at any type size. Look at the render: the arrangement is the part no

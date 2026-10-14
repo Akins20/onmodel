@@ -203,14 +203,15 @@ test("a contour that starts off the curve still closes", () => {
   assert.equal(contourToPath([{ x: 0, y: 0, on: true }]), "", "a single point is not a contour");
 });
 
-test("a font whose outlines onmodel cannot read says so plainly", () => {
+test("a font onmodel cannot read says so plainly", () => {
+  // An OpenType header with no tables behind it is opened (CFF is read now) and found empty.
   const otto = Buffer.alloc(32);
   otto.write("OTTO", 0, 4, "latin1");
-  assert.throws(() => loadFont(otto), /CFF/);
+  assert.throws(() => loadFont(otto), /no head table/);
   const ttc = Buffer.alloc(32);
   ttc.write("ttcf", 0, 4, "latin1");
   assert.throws(() => loadFont(ttc), /collection/);
-  assert.throws(() => loadFont(Buffer.from("not a font at all")), /not a TrueType font/);
+  assert.throws(() => loadFont(Buffer.from("not a font at all")), /not a TrueType or OpenType font/);
 });
 
 test("a real font from this machine reads the same way", async (t) => {

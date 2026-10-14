@@ -1,5 +1,5 @@
 /**
- * TrueType outlines, read straight out of the font.
+ * Glyph outlines, read straight out of the font.
  *
  * The image models cannot be trusted with letters, and no measurement onmodel takes could
  * catch it if they got one wrong: silhouette, colour and drift have no notion of whether
@@ -14,10 +14,12 @@
  * pairs that need closing up. Outlines are quadratic, as TrueType stores them, and come out as the cubics the
  * rest of onmodel already writes.
  *
- * OpenType's other flavour keeps its outlines in a CFF table as Type 2 charstrings, which
- * is a different parser entirely; such a font is named and turned down rather than read
- * wrongly.
+ * OpenType's other flavour (.otf) keeps its outlines in a CFF or CFF2 table as Type 2
+ * charstrings, which are cubic already; cff.mjs reads those, and everything else about the
+ * font (character map, advances, kerning) is the same tables either way.
  */
+
+import { readCFF } from "./cff.mjs";
 
 const tag = (buf, at) => buf.toString("latin1", at, at + 4);
 
@@ -26,8 +28,7 @@ function tableDirectory(buf) {
   if (buf.length < 12) throw new Error("this file is too short to be a font");
   const kind = tag(buf, 0);
   if (kind === "ttcf") throw new Error("this is a font collection (.ttc); pass one font, not a collection");
-  if (kind === "OTTO") throw new Error("this is an OpenType font with CFF outlines; onmodel reads TrueType outlines (.ttf), so use the TrueType build of this family");
-  if (kind !== "\u0000\u0001\u0000\u0000" && kind !== "true" && kind !== "typ1") throw new Error("this file is not a TrueType font");
+  if (kind !== "\u0000\u0001\u0000\u0000" && kind !== "true" && kind !== "typ1" && kind !== "OTTO") throw new Error("this file is not a TrueType or OpenType font");
   const count = buf.readUInt16BE(4);
   const tables = new Map();
   for (let i = 0; i < count; i++) {
@@ -520,12 +521,12 @@ export function contourToPath(contour, at = (p) => [p.x, p.y]) {
 export function loadFont(buffer) {
   const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
   const tables = tableDirectory(buf);
-  for (const need of ["head", "maxp", "cmap", "loca", "glyf", "hhea", "hmtx"]) {
-    if (!tables.has(need)) {
-      if (need === "glyf" && tables.has("CFF ")) throw new Error("this font keeps its outlines in a CFF table; onmodel reads TrueType outlines, so use the TrueType build of this family");
-      throw new Error(`this font has no ${need.trim()} table, so its outlines cannot be read`);
-    }
+  for (const need of ["head", "maxp", "cmap", "hhea", "hmtx"]) {
+    if (!tables.has(need)) throw new Error(`this font has no ${need} table, so it cannot be set`);
   }
+  // TrueType outlines when the font has them, else CFF, else the CFF2 of a variable .otf.
+  const flavour = tables.has("glyf") && tables.has("loca") ? "TrueType" : tables.has("CFF ") ? "CFF" : tables.has("CFF2") ? "CFF2" : null;
+  if (!flavour) throw new Error(tables.has("glyf") ? "this font has a glyf table but no loca table, so its outlines cannot be read" : "this font has neither glyf nor CFF outlines, so its letters cannot be read");
   const head = tables.get("head");
   const unitsPerEm = buf.readUInt16BE(head.offset + 18) || 1000;
   const long = buf.readInt16BE(head.offset + 50) === 1;
@@ -549,13 +550,71 @@ export function loadFont(buffer) {
   const ascender = buf.readInt16BE(tables.get("hhea").offset + 4);
   const descender = buf.readInt16BE(tables.get("hhea").offset + 6);
   const lineGap = buf.readInt16BE(tables.get("hhea").offset + 8);
-  const outlines = (gid) => readGlyph(buf, tables.get("glyf"), tables.get("loca"), long, gid, numGlyphs);
+  const outlines = flavour === "TrueType" ? (gid) => readGlyph(buf, tables.get("glyf"), tables.get("loca"), long, gid, numGlyphs) : null;
+  const cff = flavour === "TrueType" ? null : readCFF(buf, tables.get(flavour === "CFF" ? "CFF " : "CFF2"), { cff2: flavour === "CFF2", numGlyphs });
+  const commandCache = new Map();
+  const commandsOf = (gid) => {
+    if (!commandCache.has(gid)) commandCache.set(gid, gid >= 0 && gid < numGlyphs ? cff.commands(gid, unitsPerEm) : []);
+    return commandCache.get(gid);
+  };
+  // A glyph as path text, every point placed by `at`, whichever flavour of outline it came from.
+  const glyphPath = (gid, at = (p) => [p.x, p.y]) => {
+    if (outlines) return outlines(gid).map((c) => contourToPath(c, at)).join("");
+    // A contour that only moves draws nothing and is left out, as a one-point TrueType contour is.
+    let d = "";
+    let sub = "";
+    let drawn = false;
+    for (const c of commandsOf(gid)) {
+      if (c[0] === "Z") {
+        if (drawn) d += `${sub}Z`;
+        sub = "";
+        drawn = false;
+        continue;
+      }
+      let s = c[0];
+      for (let k = 1; k < c.length; k += 2) {
+        const [px, py] = at({ x: c[k], y: c[k + 1] });
+        s += `${k > 1 ? " " : ""}${r3(px)} ${r3(py)}`;
+      }
+      sub += s;
+      if (c[0] !== "M") drawn = true;
+    }
+    return d;
+  };
+  // The box round every point of the outline, control points included, in font units; null
+  // for a glyph that draws nothing.
+  const glyphBounds = (gid) => {
+    let xMin = Infinity;
+    let yMin = Infinity;
+    let xMax = -Infinity;
+    let yMax = -Infinity;
+    const take = (x, y) => {
+      if (x < xMin) xMin = x;
+      if (x > xMax) xMax = x;
+      if (y < yMin) yMin = y;
+      if (y > yMax) yMax = y;
+    };
+    if (outlines) {
+      for (const c of outlines(gid)) if (c.length >= 2) for (const p of c) take(p.x, p.y);
+    } else {
+      let moved = null;
+      for (const c of commandsOf(gid)) {
+        if (c[0] === "M") moved = c;
+        else if (c[0] !== "Z") {
+          if (moved) take(moved[1], moved[2]);
+          moved = null;
+          for (let k = 1; k < c.length; k += 2) take(c[k], c[k + 1]);
+        }
+      }
+    }
+    return Number.isFinite(xMin) ? { xMin, yMin, xMax, yMax } : null;
+  };
   // How tall a capital stands. It is what the eye lines a symbol up with, not the
   // ascender, which includes the room left above for accents. Measured off the H rather
   // than taken from OS/2, which plenty of fonts leave at zero or simply get wrong.
   let capHeight = 0;
   const h = cmap.get(0x48);
-  if (h) for (const contour of outlines(h)) for (const pt of contour) if (pt.y > capHeight) capHeight = pt.y;
+  if (h) capHeight = Math.max(0, glyphBounds(h)?.yMax ?? 0);
   if (!capHeight) {
     const os2 = tables.get("OS/2");
     if (os2 && buf.readUInt16BE(os2.offset) >= 2 && os2.offset + 90 <= buf.length) capHeight = buf.readInt16BE(os2.offset + 88);
@@ -574,7 +633,11 @@ export function loadFont(buffer) {
     glyphFor: (codepoint) => cmap.get(codepoint) ?? (cmap.symbol && codepoint < 0x100 ? cmap.get(codepoint + 0xf000) : undefined) ?? 0,
     advanceOf: (gid) => advances[gid] ?? 0,
     kernBetween,
-    contoursOf: outlines,
+    outlines: flavour,
+    glyphPath,
+    glyphBounds,
+    // TrueType's own contours, points and on-curve flags, for what needs them; a CFF font has none.
+    contoursOf: outlines ?? (() => []),
     has: (codepoint) => cmap.has(codepoint) || (cmap.symbol && codepoint < 0x100 && cmap.has(codepoint + 0xf000)),
     symbol: Boolean(cmap.symbol),
   };
@@ -602,14 +665,9 @@ export function textPath(font, text, { size = 100, letterSpacing = 0, kerning = 
     if (!font.has(code) && !space) missing.push(ch);
     const gid = font.glyphFor(code);
     if (kerning && prev != null) pen += font.kernBetween(prev, gid);
-    let drew = 0;
-    for (const contour of font.contoursOf(gid)) {
-      const d = contourToPath(contour, (p) => [r3(x + (pen + p.x) * scale), r3(baseline - p.y * scale)]);
-      if (d) {
-        parts.push(d);
-        drew++;
-      }
-    }
+    const d = font.glyphPath(gid, (p) => [r3(x + (pen + p.x) * scale), r3(baseline - p.y * scale)]);
+    const drew = d ? 1 : 0;
+    if (d) parts.push(d);
     // A letter that reads as present but draws nothing would leave a hole in the word
     // with nothing to say so, which is the one way setting type can still go wrong.
     if (!drew && !space && !missing.includes(ch)) blank.push(ch);

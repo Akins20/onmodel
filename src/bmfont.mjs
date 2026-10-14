@@ -1,6 +1,6 @@
 /**
- * Bitmap fonts: a real TrueType font set into an atlas of glyphs at one pixel size, with
- * the metrics engines need, written as an AngelCode BMFont .fnt.
+ * Bitmap fonts: a real font (TrueType or CFF OpenType) set into an atlas of glyphs at one
+ * pixel size, with the metrics engines need, written as an AngelCode BMFont .fnt.
  *
  * The letters are the type designer's outlines, rasterised here, so they cannot come out
  * malformed the way painted letters do. What can go wrong is the bookkeeping: an offset
@@ -19,7 +19,6 @@
  * vanished is a failure, a stroke that broke is reported.
  */
 
-import { contourToPath } from "./font.mjs";
 import { pathToPolygons, coverage } from "./vector.mjs";
 import { packRects } from "./trim.mjs";
 
@@ -43,25 +42,14 @@ export function fontMetrics(font, px) {
 export function rasterGlyph(font, gid, px, { mono = false, cover = 50 } = {}) {
   const s = px / font.unitsPerEm;
   const advance = Math.round(font.advanceOf(gid) * s);
-  const contours = font.contoursOf(gid);
-  let xMin = Infinity;
-  let yMin = Infinity;
-  let xMax = -Infinity;
-  let yMax = -Infinity;
-  for (const c of contours) {
-    for (const p of c) {
-      if (p.x < xMin) xMin = p.x;
-      if (p.x > xMax) xMax = p.x;
-      if (p.y < yMin) yMin = p.y;
-      if (p.y > yMax) yMax = p.y;
-    }
-  }
-  if (!Number.isFinite(xMin)) return { width: 0, height: 0, x: 0, top: 0, alpha: new Uint8Array(0), soft: new Uint8Array(0), advance };
+  const box = font.glyphBounds(gid);
+  if (!box) return { width: 0, height: 0, x: 0, top: 0, alpha: new Uint8Array(0), soft: new Uint8Array(0), advance };
+  const { xMin, yMin, xMax, yMax } = box;
   const x0 = Math.floor(xMin * s);
   const top = Math.floor(-yMax * s);
   const w = Math.max(1, Math.ceil(xMax * s) - x0);
   const h = Math.max(1, Math.ceil(-yMin * s) - top);
-  const d = contours.map((c) => contourToPath(c, (p) => [p.x * s - x0, -p.y * s - top])).join("");
+  const d = font.glyphPath(gid, (p) => [p.x * s - x0, -p.y * s - top]);
   const cov = coverage(pathToPolygons(d, { step: 0.25 }), w, h, { rule: "nonzero", sub: 16 });
   const soft = new Uint8Array(w * h);
   for (let i = 0; i < cov.length; i++) soft[i] = Math.round(cov[i] * 255);
@@ -85,7 +73,7 @@ export function rasterGlyph(font, gid, px, { mono = false, cover = 50 } = {}) {
   // dot of an i and its stem are two), which is what a crisp render has to keep.
   let outline = null;
   if (mono) {
-    const d4 = contours.map((c) => contourToPath(c, (p) => [(p.x * s - x0) * 4, (-p.y * s - top) * 4])).join("");
+    const d4 = font.glyphPath(gid, (p) => [(p.x * s - x0) * 4, (-p.y * s - top) * 4]);
     const big = coverage(pathToPolygons(d4, { step: 0.5 }), w * 4, h * 4, { rule: "nonzero", sub: 4 });
     outline = { width: w * 4, height: h * 4, mask: big.map((v) => (v >= 0.5 ? 1 : 0)) };
   }

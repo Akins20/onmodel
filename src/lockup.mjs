@@ -90,7 +90,7 @@ export async function makeLockup({
   log = (s) => process.stderr.write(s),
 }) {
   if (!text || !String(text).trim()) throw new Error('lockup needs --string "<the words>"');
-  if (!fontPath) throw new Error("lockup needs --font <file.ttf>: the letters are set from a real font, not drawn");
+  if (!fontPath) throw new Error("lockup needs --font <file.ttf or .otf>: the letters are set from a real font, not drawn");
   if (!["beside", "above"].includes(layout)) throw new Error("--layout must be beside or above");
 
   const { mark, file } = await loadMark({ config, name, candidate, markPath });

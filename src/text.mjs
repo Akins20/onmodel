@@ -52,7 +52,7 @@ function brandFill(colour, palette, names) {
 
 export async function makeText({ config, text, fontPath, name = null, size = 128, tracking = 0, colour = null, kerning = true, log = (s) => process.stderr.write(s) }) {
   if (!text || !String(text).trim()) throw new Error("text needs --string \"<the words>\"");
-  if (!fontPath) throw new Error('text needs --font <file.ttf>: the letters are set from a real font, not drawn');
+  if (!fontPath) throw new Error('text needs --font <file.ttf or .otf>: the letters are set from a real font, not drawn');
   const label = slug(name ?? String(text));
   const dir = path.join(config.out, label, "text");
   await mkdir(dir, { recursive: true });

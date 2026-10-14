@@ -23,7 +23,7 @@ const PANGRAMS = ["The quick brown fox jumps over the lazy dog.", "THE QUICK BRO
 const MAX_PREVIEW = 4096;
 
 export async function makeBitmapFont({ config, fontPath, px = 16, chars = null, mono = false, cover = 50, kerning = true, name = null, log = (s) => process.stderr.write(s) }) {
-  if (!fontPath) throw new Error("bitmapfont needs --font <a .ttf file>");
+  if (!fontPath) throw new Error("bitmapfont needs --font <a .ttf or .otf file>");
   let buffer;
   try {
     buffer = await readFile(fontPath);
