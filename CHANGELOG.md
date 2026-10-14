@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 (2026-10-14)
 
 - Trimmed sprite atlases (`sprites --trim`, and `onmodel atlas --trim` to pack an existing run
   again for free): each frame cut to its own pixels and packed, 70 to 85% fewer texels on a
