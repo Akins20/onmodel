@@ -17,6 +17,9 @@ import { makeTileset } from "../src/tileset.mjs";
 import { makeNormalMap } from "../src/normalmap.mjs";
 import { makeShape } from "../src/shape.mjs";
 import { makeTerrain } from "../src/terrainset.mjs";
+import { makeAtlas } from "../src/repack.mjs";
+import { makeNinePatch } from "../src/ninepatchset.mjs";
+import { makeBitmapFont } from "../src/bitmapfontset.mjs";
 import { makeVector } from "../src/vectorize.mjs";
 import { checkRun, findRuns, failuresOf } from "../src/check.mjs";
 
@@ -50,6 +53,13 @@ Commands
           [--mode both|sides]        material, composited from one seamless fill (scaled to one cell)
           [--cell 32] [--round 4]    with every peering bit derived, then every pair of cells that can
           [--terrain name]           touch is checked edge by edge; --round is clamped so edges stay exact (free)
+  bitmapfont --font f.ttf [--px 16]  a bitmap font set from a real font's outlines, written as an AngelCode
+          [--chars "..."] [--mono]   .fnt with its page (Godot imports it as a FontFile); text set from the
+          [--cover 50] [--no-kerning] files read back must match the glyphs as built, pixel for pixel (free)
+  ninepatch --mark panel.png or --name run  a panel, button or frame that stretches to any size: the
+          [--scale 0.25]             insets found from the art (the bands whose lines are alike),
+          [--insets l,t,r,b]         written as a Godot StyleBoxTexture, an Android .9.png and CSS
+          [--content l,t,r,b]        border-image; a .9.png given as --mark keeps its own marks (free)
   shape --mark art.png or --name run  the collision and occlusion shape traced from the art's own
         [--points 16]                silhouette, simplified to a budget, with an OccluderPolygon2D and
                                      the outline drawn over the art to show where it is wrong (free)
@@ -73,6 +83,11 @@ Commands
            [--actions "walk:6:a steady walk;jump:5"] [--frame 32] [--subject "..."]
            [--pick 2] [--no-sheet] [--no-judge] [--budget 2]
                                     then pack the atlas with JSON, CSS and C exports and APNG/GIF previews
+           [--trim] [--alpha 1] [--padding 2] [--pivot]
+                                    --trim cuts each frame to its pixels and records where it sat;
+                                    --pivot writes the point every frame stands on
+  atlas --name x [--trim] [--pivot] pack a sprites run again, trimmed or with a pivot, every frame
+        [--alpha 1] [--padding 2]   put back from the record and compared with its cell (free)
   check [--name x | --in dir]       re-check written outputs against the rulebook, no API (a CI gate);
                                     no target checks every run under --out. Exits 2 on any failure.
   price [--subjects N] [--store]    what a planned batch would cost before it runs, no API
@@ -145,6 +160,15 @@ const OPTIONS = {
   normal: { type: "boolean" },
   points: { type: "string" },
   collision: { type: "boolean" },
+  trim: { type: "boolean" },
+  insets: { type: "string" },
+  chars: { type: "string" },
+  cover: { type: "string" },
+  content: { type: "string" },
+  scale: { type: "string" },
+  pivot: { type: "boolean" },
+  alpha: { type: "string" },
+  padding: { type: "string" },
   mode: { type: "string" },
   cell: { type: "string" },
   columns: { type: "string" },
@@ -165,6 +189,28 @@ function emit(config, text, json) {
 }
 
 const money = (v) => (v == null ? "no price" : `$${v.toFixed(4)}`);
+
+/** What an atlas holds and whether a trimmed one puts every frame back, in plain lines. */
+function atlasLines(a) {
+  const names = [a.image, a.json, a.godot, a.header].map((f) => path.basename(f)).join(", ");
+  const lines = [`atlas ${a.width}x${a.height}: ${names}; CSS ${path.basename(a.css)} on ${path.basename(a.cells ?? a.image)}`];
+  const t = a.trim;
+  if (t) {
+    const share = Math.round(Math.abs(t.fewerTexels) * 100);
+    lines.push(
+      t.fewerTexels >= 0
+        ? `trimmed from the ${t.gridWidth}x${t.gridHeight} grid: ${share}% fewer texels, padding ${t.padding}${t.margin ? ", one clear texel kept round each frame for filtering" : ""}`
+        : `trimmed, but ${share}% MORE texels than the ${t.gridWidth}x${t.gridHeight} grid: the frames fill their cells, so padding costs more than trimming saves; the grid is the better atlas here`,
+      t.verdict === "exact"
+        ? `every frame put back from the record matches its cell pixel for pixel${t.faint ? ` (${t.faint} pixels fainter than alpha ${t.alpha} were cut on purpose)` : ""}${t.empty.length ? `; ${t.empty.length} frames are empty` : ""}`
+        : t.verdict === "lossy"
+          ? `${t.lost} visible pixels (half opaque or more) were cut by --alpha ${t.alpha}; lower it`
+          : `${t.moved} frames do not come back where they were: ${t.wrong.join("; ")}`,
+    );
+  }
+  if (a.pivot) lines.push(`pivot (${a.pivot.x}, ${a.pivot.y}) in each ${a.frame.width}x${a.frame.height} cell; in Godot set the AnimatedSprite2D offset to (${a.pivot.godotOffset.x}, ${a.pivot.godotOffset.y}) to stand it on its node`);
+  return lines;
+}
 
 async function main() {
   let parsed;
@@ -530,10 +576,76 @@ async function main() {
           : `  ${a.name}: ${a.frames} frames from ${a.parts > 1 ? `${a.parts} strips (${a.attempts.length} painted)` : `strip ${a.best} of ${a.attempts.length}`}${a.fixes.length ? `, ${a.fixes.filter((x) => x.accepted).length}/${a.fixes.length} repaints kept` : ""}, still flagged ${JSON.stringify((a.final?.flagged ?? []).map((i) => i + 1))}${a.judgement?.verdict ? `, judge says ${a.judgement.verdict}` : ""}`,
       );
       const out = [`${result.name} sprites in ${result.dir}`, ...lines];
-      if (result.atlas) out.push(`atlas ${result.atlas.width}x${result.atlas.height}: ${[result.atlas.image, result.atlas.json, result.atlas.css, result.atlas.header].map((f) => path.basename(f)).join(", ")}`);
+      if (result.atlas) out.push(...atlasLines(result.atlas));
       if (result.stopped) out.push(`stopped early: ${result.stopped}`);
       out.push(`cost ${money(result.estimatedCostUSD)}; open ${result.htmlPath}`);
       emit(config, out.join("\n"), { command: "sprites", ...result });
+      if (result.atlas?.trim && result.atlas.trim.verdict !== "exact") process.exitCode = 2;
+      return;
+    }
+    case "bitmapfont": {
+      const config = await loadConfig(flags);
+      const px = flags.px == null ? 16 : Number(flags.px);
+      if (!(Number.isInteger(px) && px >= 4 && px <= 256)) throw new Error("--px must be a whole number of pixels from 4 to 256");
+      const cover = flags.cover == null ? 50 : Number(flags.cover);
+      if (!(Number.isInteger(cover) && cover >= 1 && cover <= 99)) throw new Error("--cover must be a whole percentage from 1 to 99");
+      if (flags.cover != null && !flags.mono) throw new Error("--cover sets where a crisp pixel starts, so it needs --mono");
+      const result = await makeBitmapFont({ config, fontPath: flags.font ?? null, px, chars: flags.chars ?? null, mono: Boolean(flags.mono), cover, kerning: !flags["no-kerning"], name: flags.name ?? null });
+      const f = result.facts;
+      const lines = [
+        `${result.name} bitmap font in ${result.dir}: ${f.verdict} (${f.written} of ${f.requested} characters at ${f.px}px${f.mono ? `, crisp at ${f.cover}% cover` : ""}, ${f.pageWidth}x${f.pageHeight} page)`,
+        `line height ${f.lineHeight}, baseline ${f.base} down; ${f.kernings} kerning pairs${f.kerning === "off" ? " (kerning off)" : f.kerning ? ` from the font's ${f.kerning}` : ", the font has none"}`,
+        f.previewDiffers ? `text set from the files on disk differs from the glyphs as built in ${f.previewDiffers} pixels, so a metric was written wrong` : `text set from the .fnt and page read back matches the glyphs as built, pixel for pixel`,
+        ...(f.missing.length ? [`the font has no ${f.missing.map((c) => JSON.stringify(c)).join(" ")}; they are left out, not drawn with something else`] : []),
+        ...(f.blank.length ? [`${f.blank.map((c) => JSON.stringify(c)).join(" ")} draw nothing at this size`] : []),
+        ...(f.lost.length ? [`cutting to crisp pixels lost part of ${f.lost.map((c) => JSON.stringify(c)).join(" ")}; a lower --cover keeps thinner strokes, a bigger --px keeps them all`] : []),
+        ...(f.broken.length ? [`strokes broke into pieces in ${f.broken.map((c) => JSON.stringify(c)).join(" ")}; usual for thin diagonals this small, and worth a look`] : []),
+        ...(f.syntheticSpace ? ["the font has no space; a quarter of an em was used"] : []),
+        `Godot imports ${path.basename(result.files.fnt)} as a FontFile: set the font size to ${f.px}${f.mono ? ` (or ${f.px * 2}, ${f.px * 3}: a crisp font scales by whole steps, and under half its size it draws nothing)` : ""}; look at ${path.basename(result.files.preview)}`,
+      ];
+      emit(config, lines.join("\n"), { command: "bitmapfont", ...result });
+      if (f.verdict !== "complete") process.exitCode = 2;
+      return;
+    }
+    case "ninepatch": {
+      const config = await loadConfig(flags);
+      // Sides come left, top, right, bottom, which is Godot's order; one value is all four.
+      const sides = (v, what) => {
+        if (v == null) return null;
+        const n = String(v).split(/[ ,]+/).filter(Boolean).map(Number);
+        const four = n.length === 1 ? [n[0], n[0], n[0], n[0]] : n;
+        if (four.length !== 4 || !four.every((x) => Number.isInteger(x) && x >= 0)) throw new Error(`--${what} must be one whole number, or four (left,top,right,bottom)`);
+        return four;
+      };
+      let scale = null;
+      if (flags.scale != null) {
+        scale = Number(flags.scale);
+        if (!(scale >= 0.05 && scale <= 1)) throw new Error("--scale must be a share from 0.05 to 1");
+      }
+      const result = await makeNinePatch({ config, name: flags.name ?? null, candidate: flags.candidate ?? null, markPath: flags.mark ?? null, insets: sides(flags.insets, "insets"), content: sides(flags.content, "content"), scale });
+      const f = result.facts;
+      const axis = (a, way) => (a.stretches ? (a.failing ? `${a.failing} of the ${a.lines} lines it stretches ${way} are not alike, so they will smear` : `stretches ${way} over ${a.lines} alike lines`) : `does not stretch ${way}: ${a.split ? "something in the middle splits the plain band" : "no band of alike lines holds the middle"}, so keep its size ${way} fixed; at its own size it draws exactly as painted`);
+      const lines = [
+        `${result.name} nine-patch in ${result.dir}: ${f.verdict} (${f.width}x${f.height}${f.scale !== 1 ? `, scaled from ${f.sourceWidth}x${f.sourceHeight}` : ""}${f.fromAndroid ? ", read from the .9.png's own marks" : ""})`,
+        `insets left ${f.insets.left}, top ${f.insets.top}, right ${f.insets.right}, bottom ${f.insets.bottom}${f.given ? " (given)" : ""}; content ${f.content.left},${f.content.top},${f.content.right},${f.content.bottom}`,
+        `${axis(f.across, "across")}; ${axis(f.down, "down")}`,
+        ...(f.lopsided ? ["the insets are lopsided; if the art is symmetric, a shadow or highlight on one side is probably why"] : []),
+        ...(f.bigCorners ? ["corners over 64px are big for UI; --scale shrinks the art before measuring"] : []),
+        `Godot: ${path.basename(result.files.stylebox)} as a StyleBox, or a NinePatchRect with patch margins ${f.insets.left},${f.insets.top},${f.insets.right},${f.insets.bottom}`,
+        `Android: copy only ${path.basename(result.files.android)} into res/drawable-*/ (never resized); web: ${path.basename(result.files.css)}; look at ${path.basename(result.files.preview)}`,
+      ];
+      emit(config, lines.join("\n"), { command: "ninepatch", ...result });
+      if (f.verdict === "smears") process.exitCode = 2;
+      return;
+    }
+    case "atlas": {
+      const config = await loadConfig(flags);
+      if (flags.normal) config.sprite = { ...config.sprite, normal: true };
+      const result = await makeAtlas({ config, name: flags.name });
+      const out = [`${result.name} atlas in ${result.dir}, packed from ${path.basename(result.from)}`, ...atlasLines(result.atlas)];
+      if (result.framesEdited) out.push(`${result.framesEdited} of ${result.framesCompared} frame files differ from the atlas, so one or the other was edited after the run; this was packed from the atlas, which is what ships, so an edit made only to a frame file is not in it`);
+      emit(config, out.join("\n"), { command: "atlas", ...result });
+      if (result.atlas.trim && result.atlas.trim.verdict !== "exact") process.exitCode = 2;
       return;
     }
     case "check": {

@@ -65,21 +65,37 @@ export async function makeText({ config, text, fontPath, name = null, size = 128
   // rounding on the way through.
   const pad = Math.max(1, Math.round(size * 0.06));
   const scale = size / font.unitsPerEm;
-  const set = textPath(font, text, { size, letterSpacing: tracking, kerning, x: pad, y: pad + font.ascender * scale });
+  // The canvas is the ink's own bounds joined with the advance box, not the advance box alone:
+  // an italic f overhangs its advance, a j reaches left of its pen and a ring rises over the
+  // ascender, and a canvas cut to the advances cropped them while calling the set exact.
+  const probe = textPath(font, text, { size, letterSpacing: tracking, kerning, x: 0, y: font.ascender * scale });
+  let ux0 = 0;
+  let uy0 = 0;
+  let ux1 = probe.width;
+  let uy1 = probe.height;
+  for (const poly of pathToPolygons(probe.d)) {
+    for (const [x, y] of poly) {
+      if (x < ux0) ux0 = x;
+      if (y < uy0) uy0 = y;
+      if (x > ux1) ux1 = x;
+      if (y > uy1) uy1 = y;
+    }
+  }
+  const set = textPath(font, text, { size, letterSpacing: tracking, kerning, x: pad - ux0, y: pad - uy0 + font.ascender * scale });
   const names = paletteNames(config.briefText);
   const fill = brandFill(colour, config.palette ?? [], names);
   const token = (n) => `${tokenPrefix}-${n}`;
 
-  const w = Math.max(1, Math.ceil(set.width) + pad * 2);
-  const h = Math.max(1, Math.ceil(set.height) + pad * 2);
+  const w = Math.max(1, Math.ceil(ux1 - ux0) + pad * 2);
+  const h = Math.max(1, Math.ceil(uy1 - uy0) + pad * 2);
   const d = set.d;
 
-  const layers = [{ ...fill, d, loops: (d.match(/M/g) ?? []).length, curves: (d.match(/C/g) ?? []).length }];
+  const layers = [{ ...fill, d, rule: "nonzero", loops: (d.match(/M/g) ?? []).length, curves: (d.match(/C/g) ?? []).length }];
   const svg = svgText(layers, w, h, { title: label, token });
 
   // The one thing worth drawing back: that the path carries ink at all. A word that
   // parsed into nothing would otherwise be written out as a valid, empty SVG.
-  const cov = coverage(pathToPolygons(d), w, h);
+  const cov = coverage(pathToPolygons(d), w, h, { rule: "nonzero" });
   let on = 0;
   for (const v of cov) if (v > 0.5) on++;
   const inkShare = Math.round((on / (w * h)) * 1000) / 1000;

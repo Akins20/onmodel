@@ -257,6 +257,90 @@ corner, so where two cells disagree about what is above them the edge steps, and
 128 pairs that can touch join. That is the mode, not a fault, and it is the reason to pick
 `--mode both` for anything meant to look seamless.
 
+## Nine-patch UI
+
+```bash
+onmodel ninepatch --mark panel.png               # insets found from the art
+onmodel ninepatch --name panel --scale 0.25      # a generated panel, shrunk to UI size first
+onmodel ninepatch --mark button.9.png            # an Android nine-patch, converted as it is
+```
+
+A panel, button or frame stretches to any size without its corners distorting when only its
+middle band of columns stretches across and its middle band of rows stretches down. That is
+invisible only when every line in the band is the same line, so the band is found from the
+art rather than guessed: which lines are alike, out from the middle.
+
+"Alike" depends on the art. Crisp art (pixel art, flat UI with hard edges) is compared line for
+line exactly, which is right at any size down to a 3x3 frame, through thick borders, inner lines
+and clear gutters. Soft art is not clean: an anti-aliased outline wobbles by a fraction of a pixel
+and a generated image arrives as JPEG, and demanding exact sameness found bands a few pixels wide
+in panels that plainly stretch. So every pixel is averaged with its neighbours first, which cancels
+noise and keeps anything two pixels across; the noise is read at that scale, in the quieter
+direction and from a high percentile, because JPEG leaves most differences at exactly nothing while
+lines in a plain fill still sit a few levels apart; a row's tolerance grows a little with the edge
+running through it, enough for an outline's wobble but not for a tab, notch or tail two pixels deep;
+a line or two straying just past the tolerance between alike lines is a compression blip and is
+forgiven; and a straight ramp passes, because stretching a gradient only resamples it. The plain
+line is put to a vote: each of sixteen lines is tried, flat and as a ramp, and the one most lines
+pass the full test against wins, so neither a label wide enough to fill the middle nor a corner row
+of a pill can become the reference. Plain JPEG panels from q80 up stretch, and so do pills.
+
+The band has to be the plain fill. A label, an emblem, a glow or a dot in the middle is refused on
+both axes, including when the gap between two words is what holds the middle: stretching there
+pulls the words apart. A header bar is not a feature, its fill is a different line from the
+body's, so the body stretches and the header stays put. A dithered or banded middle would have to
+tile rather than stretch, which this does not do yet, and it says so.
+
+Where it cannot tell, it says what it assumes. In crisp art a small fill inside a thick frame and a
+small shape inside a plain fill look the same; a shape counts as a feature when the fill round it
+dwarfs it or has more frame beyond it. A shape made of straight lines in the middle (a stop square,
+a pause icon) looks like an inset screen panel, which should stretch, so it does when nothing tells
+them apart: leave icons and labels out of the art and put them on top. Fine random grain reads as
+noise and stretches like it. An outline that visibly waves does not stretch, since stretching
+changes the wave, and very heavy compression with noise can split a plain panel; the message says
+so and `--insets` measures the insets you give.
+
+It writes `<name>.stylebox.tres` (a StyleBoxTexture, in the exact layout Godot 4.7.2 writes and
+loads, usable as any Control's panel or button state), `<name>.9.png` for Android (aapt2 compiles
+it and records the same stretch the insets say), `<name>.css` (border-image), the insets for a
+NinePatchRect and in Unity's order, and a preview stretched two ways. Art that stretches one way
+only gets no insets the other way and is told to keep that size fixed. `--insets l,t,r,b`
+overrides the search and is measured all the same, each band against its own lines. A `.9.png`
+given as the art keeps its marks, red layout-bound ticks and old white borders included; one that
+stretches several regions to hold something between them is named and refused, since a
+StyleBoxTexture and CSS border-image each stretch one. Generated art is usually far too big for UI,
+and a StyleBoxTexture has no scale of its own, so `--scale` shrinks it before anything is measured.
+
+## Bitmap fonts
+
+```bash
+onmodel bitmapfont --font Inter.ttf --px 16                  # smooth
+onmodel bitmapfont --font PixelFont.ttf --px 8 --mono        # crisp, for pixel art
+onmodel bitmapfont --font Inter.ttf --px 24 --chars "0123456789:"
+```
+
+A real font set at one pixel size into a page of glyphs, written as an AngelCode `.fnt`, which
+Godot imports as a FontFile and libGDX, raylib and MonoGame read as it is, with the same font as
+BMFont XML beside it, which is the only form Phaser loads. The letters
+are the type designer's outlines filled by non-zero winding, as TrueType fills, so they cannot
+come out malformed. Kerning comes from GPOS, where nearly every modern font keeps it, read the way
+HarfBuzz reads it (Calibri: 611 kerned pairs in printable ASCII, A then T at -160 units), or from
+the old kern table.
+
+What can go wrong is the bookkeeping: an offset one pixel out drops every letter below the line.
+So text is set twice, once from the glyphs as built and once from the `.fnt` and page read back
+off disk, against the baseline it was built with, and the two must agree pixel for pixel: the
+pangrams, every character, and every kerning pair set side by side (Calibri at 16px: 147 of them). Godot 4.7.2 imported the result as a FontFile
+with the written ascent, descent, offsets and kerning, and applied the kerning when setting "AT".
+
+Crisp fonts cut coverage at `--cover` (50%). Small sizes can lose a thin stroke or break a curve,
+and a font looks fine as a list of characters and wrong in a word, so both are measured against
+the outline's own pieces: a piece that left no pixel fails the run (Arial at 10px loses the dots
+of the i and the j; at 8px the whole i, the l and the thin punctuation), a piece that broke is
+named. A symbol or dingbat font is read too, its characters reached from the byte codes it was made
+for. Set the font size in Godot to the `--px` it was made at, or a
+whole multiple for a crisp one: the preset onmodel writes scales it by whole steps.
+
 ## Lighting, bodies and Godot
 
 ```bash
@@ -553,6 +637,39 @@ puts one action per row and comes with:
 - `preview.png` (APNG) and `preview.gif` per action, enlarged with hard pixels in pixel
   mode so people can see them.
 
+Phaser reads the frames by name, so build an action from them with
+`this.anims.generateFrameNames("hero", { prefix: "walk_", start: 0, end: 5 })`; its
+`createFromAseprite` looks frames up by number and finds none of them.
+
+**Trimmed atlases.** `--trim` cuts each frame to its own pixels and packs them tight: on a
+typical character most of every cell is air, and trimmed atlases come out 70 to 85% smaller
+in texels. Every export records where each frame sat in its cell so it is drawn exactly where
+it was: `spriteSourceSize` and `sourceSize` in the JSON (Phaser and PixiJS restore from them),
+an AtlasTexture `margin` in the Godot SpriteFrames (Godot 4.7.2 drew trimmed frames back at
+the full cell size with 0 pixels different), and `ox, oy, sw, sh` in the C header. Painted art
+keeps one clear texel inside each frame, because an engine draws only the trimmed region and
+a frame cut flush loses the half texel of soft edge that filtering blended into the empty cell;
+pixel art is cut flush. `--padding` (2) keeps frames apart so they do not bleed into each
+other, and `--alpha` lets pixels fainter than it go. The CSS stays on the untrimmed grid,
+written as `<name>.cells.png`, because a `steps()` animation walks equal frames.
+
+The trim is checked, not assumed: every frame is put back from the record just written and
+compared with its untrimmed cell, pixel for pixel, and a visible pixel cut by `--alpha` is
+named. Frames that already fill their cells come out bigger once padded, and the run says so
+rather than calling it a saving.
+
+**The pivot.** `--pivot` writes the point every frame stands on (the middle of the ground
+line for a bottom anchor) as `pivot` and `anchor` in the JSON and `PIVOT_X`, `PIVOT_Y` in the
+header, and gives the AnimatedSprite2D offset that stands the sprite on its node in Godot. It
+is off unless asked for: once a JSON frame carries a pivot, Phaser sets the sprite's origin
+from it on every animation frame, which would quietly move every sprite a game already places.
+
+**Packing again, free.** `onmodel atlas --name hero --trim --pivot` packs a sprites run that
+already exists, with no call to anything, into `hero/atlas/`. It cuts the frames from the
+run's atlas, which is what ships (a trimmed run's frames put back from its own record), so a
+touch-up made to it after the run is kept; it says when the frame files no longer match it; and it
+keeps the run's pixel mode and normal map, so pixel art is still cut flush and drawn crisp.
+
 **Any sequence.** `--no-sheet` (or no sheet on disk) holds the frames to each other
 instead: colours to the first frame, every step to the one before. A plant growing, a
 loading animation, a logo assembling itself: anything that must stay the same thing
@@ -668,7 +785,10 @@ their recorded size. Any failure exits with code 2, naming the file and the rule
 | `store --name x [--subject "..."]` | an on-brand hero painted and judged, then cropped to the Play feature graphic, the Open Graph and the GitHub previews, no alpha |
 | `edit --name x --change "..."` | continue a candidate's conversation with one change; measured against its parent and judged |
 | `sheet --subject "..." --name x` | the model sheet: front, side and back views, sliced and measured |
-| `sprites --name x` | each action as a strip, measured against the sheet, repaired, packed and exported |
+| `sprites --name x` | each action as a strip, measured against the sheet, repaired, packed and exported; `--trim` and `--pivot` |
+| `atlas --name x [--trim] [--pivot]` | pack a sprites run again, trimmed or with a pivot, every frame put back and compared (free) |
+| `ninepatch --mark panel.png` | the insets that let UI art stretch, found from the art; a Godot StyleBoxTexture, an Android .9.png and CSS (free) |
+| `bitmapfont --font f.ttf --px 16` | a bitmap font from a real font, written as a .fnt and page, set back from disk and compared (free) |
 | `check [--name x \| --in dir]` | re-check written outputs against the rulebook, no API; no target checks every run under `--out`; exits 2 on failure |
 | `price [--subjects N] [--store] [--sprites "..."]` | what a planned batch would cost before it runs, no API |
 | `cost [--out dir]` | what every run has cost so far, from the ledger |
@@ -732,6 +852,8 @@ Every knob has a default. Resolution order, lowest to highest: built-in defaults
 - **Editing a sprite frame by command.** `edit` works on generate candidates and on
   model sheets (`--sheet`); a single sprite frame is repaired through the measured and
   judged repaints, not edited directly.
+- **Multi-page bitmap fonts.** A bitmap font fits on one page (up to 512 characters); a
+  font for a whole CJK set needs several pages and is not made yet.
 - **Store screenshot sets.** `store` makes the generative graphics (the feature graphic,
   the link previews). Framing real screenshots inside a phone with a caption is
   typesetting, not generation, so it stays in [ui-critic](https://github.com/Akins20/ui-critic)'s

@@ -152,6 +152,7 @@ export async function makeLockup({
   const wordLayer = {
     ...pickInk(v, config, names),
     d: transformPath(set.d, 1, wordAt.x, wordAt.y),
+    rule: "nonzero",
     loops: (set.d.match(/M/g) ?? []).length,
     curves: (set.d.match(/C/g) ?? []).length,
   };

@@ -324,7 +324,7 @@ export function renderSpritesHTML(summary, dir) {
         .join("")}</div></section>`
     : `<section class="block"><p class="meta">No model sheet: frames were held to each other only.</p></section>`;
   const atlas = summary.atlas
-    ? `<section class="block atlas"><h2>Atlas <span class="meta">${summary.atlas.width}x${summary.atlas.height}, frames ${summary.atlas.frame.width}x${summary.atlas.frame.height}, one action per row</span></h2><img class="checker" src="${esc(relativeSrc(dir, summary.atlas.image))}" alt="" style="width:${Math.min(1100, summary.atlas.width * show)}px"><p class="meta">Exports: <code>${esc(path.basename(summary.atlas.image))}</code> <code>${esc(path.basename(summary.atlas.json))}</code> (TexturePacker hash with frame tags) <code>${esc(path.basename(summary.atlas.css))}</code> <code>${esc(path.basename(summary.atlas.header))}</code></p></section>`
+    ? `<section class="block atlas"><h2>Atlas <span class="meta">${summary.atlas.width}x${summary.atlas.height}, ${summary.atlas.layout === "trimmed" ? `trimmed from ${summary.atlas.frame.width}x${summary.atlas.frame.height} cells, each frame cut to its pixels and packed` : `frames ${summary.atlas.frame.width}x${summary.atlas.frame.height}, one action per row`}</span></h2><img class="checker" src="${esc(relativeSrc(dir, summary.atlas.image))}" alt="" style="width:${Math.min(1100, summary.atlas.width * show)}px"><p class="meta">Exports: <code>${esc(path.basename(summary.atlas.image))}</code> <code>${esc(path.basename(summary.atlas.json))}</code> (TexturePacker hash with frame tags) <code>${esc(path.basename(summary.atlas.css))}</code> <code>${esc(path.basename(summary.atlas.header))}</code></p></section>`
     : "";
   const actions = summary.actions
     .map((a) => {

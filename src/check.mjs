@@ -1,4 +1,5 @@
 import { readFile, readdir, access } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { decodeImage } from "./image.mjs";
 import { checkIcon, STORE_TARGETS } from "./rules.mjs";
@@ -6,6 +7,9 @@ import { icoInfo } from "./ico.mjs";
 import { seam } from "./tile.mjs";
 import { pathToPolygons } from "./vector.mjs";
 import { MODES, variants, layout, adjacencyReport, coverage } from "./terrain.mjs";
+import { verifyTrim } from "./trim.mjs";
+import { bandSmear, findBand, readAndroidNinePatch } from "./ninepatch.mjs";
+import { parseFnt } from "./bmfont.mjs";
 
 /**
  * A no-API gate: re-read what a run already wrote and hold it to the same rules,
@@ -25,12 +29,17 @@ import { MODES, variants, layout, adjacencyReport, coverage } from "./terrain.mj
  */
 
 const isRaster = (p) => /\.(png|jpe?g)$/i.test(p);
+/** Either path separator, so a summary written on Windows is read anywhere and the other way round. */
+const SEP = /[\\/]/;
 
 /** Each summary and the subfolder of a run it is written to (icons/, sprites/, store/). */
 const LAYOUT = [
   ["generate.json", null],
   ["icons.json", "icons"],
   ["sprites.json", "sprites"],
+  ["atlas.json", "atlas"],
+  ["ninepatch.json", "ninepatch"],
+  ["bitmapfont.json", "bitmapfont"],
   ["store.json", "store"],
   ["vector.json", "vector"],
   ["text.json", "text"],
@@ -240,6 +249,311 @@ export async function recheckOccluder(file, first = null) {
   return { file: got.file, bytes: Buffer.byteLength(got.text), checks };
 }
 
+/**
+ * Re-reads a trimmed atlas and everything that records where its frames sat, and puts
+ * every frame back. The untrimmed grid is written beside the atlas (for the CSS), so the
+ * frames can be restored from the JSON on disk and compared with their cells pixel for
+ * pixel; the Godot margins and the C header are each held to the same record, so a hand
+ * edit to one of them fails that file. The grid is a recorded output like the rest (onmodel atlas
+ * packs a trimmed run again from it), so a missing one fails as missing; the other files are
+ * still held to each other, which is said.
+ */
+export async function recheckTrimmed(a, at) {
+  const files = [];
+  const json = await readText(at(a.json));
+  if (json.error) return [{ rel: String(a.json).split(/[\\/]/).pop(), ...json }];
+  let frames;
+  try {
+    frames = JSON.parse(json.text).frames;
+  } catch (err) {
+    return [{ rel: path.basename(json.file), file: json.file, error: "not JSON", checks: [{ check: "parses", ok: false, detail: err.message }] }];
+  }
+  const { width: fw, height: fh } = a.frame;
+  // Where each frame's cell sits in the grid: one action per row, frames left to right.
+  const placements = [];
+  a.actions.forEach((act, row) => {
+    for (let i = act.from; i <= act.to; i++) {
+      const name = `${act.name}_${i - act.from}`;
+      const f = frames?.[name];
+      if (!f) continue;
+      placements.push({ name, index: i, x: f.frame.x, y: f.frame.y, width: f.frame.w, height: f.frame.h, cellX: (i - act.from) * fw, cellY: row * fh, trim: { x: f.spriteSourceSize.x, y: f.spriteSourceSize.y, sourceW: fw, sourceH: fh } });
+    }
+  });
+  const expected = a.actions.reduce((t, x) => t + x.to - x.from + 1, 0);
+  // Phaser and PixiJS restore a frame only when it says it was trimmed; one marked untrimmed
+  // is drawn at the cell's corner, so every frame of the action jitters.
+  const unmarked = placements.filter((p) => frames[p.name]?.trimmed !== true).length;
+  // Engines size each frame from its sourceSize, so one that misstates the cell draws that frame
+  // somewhere else; and none of onmodel's frames is rotated.
+  const missized = placements.filter((p) => frames[p.name]?.sourceSize?.w !== fw || frames[p.name]?.sourceSize?.h !== fh).length;
+  const rotated = placements.filter((p) => frames[p.name]?.rotated).length;
+  const jsonChecks = [
+    { check: "frames", ok: placements.length === expected, detail: `${placements.length} of the ${expected} frames are in the JSON` },
+    { check: "trimmed", ok: unmarked === 0, detail: unmarked ? `${unmarked} frames are not marked trimmed, so Phaser and PixiJS draw them at the cell's corner` : "every frame is marked trimmed" },
+    { check: "cells", ok: missized === 0 && rotated === 0, detail: missized || rotated ? `${missized} frames state a cell other than ${fw}x${fh} and ${rotated} say they are rotated` : `every frame's cell is ${fw}x${fh}, unrotated` },
+  ];
+  const cells = a.cells ? await recheckFile(at(a.cells), a.trim ? { width: a.trim.gridWidth, height: a.trim.gridHeight } : null) : null;
+  if (cells && !cells.error && cells.checks.every((c) => c.ok)) {
+    const atlas = await recheckFile(at(a.image), null);
+    if (!atlas.error) {
+      const v = verifyTrim(decodeImage(await readFile(atlas.file)), placements, decodeImage(await readFile(cells.file)), { alpha: a.trim?.alpha ?? 1 });
+      jsonChecks.push({
+        check: "restores",
+        ok: v.moved === 0 && v.lost === 0,
+        detail: v.moved ? `${v.moved} frames do not come back where they were (the record, the atlas or the grid was changed): ${v.wrong.join("; ")}` : v.lost ? `${v.lost} visible pixels were cut` : "every frame comes back exactly where it was in its cell",
+      });
+    }
+  } else {
+    jsonChecks.push({ check: "restores", ok: true, warn: true, detail: "the untrimmed grid is not beside the atlas, so frames are checked against each other's records only" });
+  }
+  files.push({ rel: path.basename(json.file), file: json.file, bytes: Buffer.byteLength(json.text), checks: jsonChecks });
+  if (cells) files.push({ rel: String(a.cells).split(/[\\/]/).pop(), ...cells });
+
+  // The Godot margins: region plus margin must be the cell, with the pixels where the JSON says.
+  const tres = await readText(at(a.godot));
+  if (tres.error) files.push({ rel: String(a.godot).split(/[\\/]/).pop(), ...tres });
+  else {
+    const blocks = new Map();
+    for (const m of tres.text.matchAll(/\[sub_resource type="AtlasTexture" id="AtlasTexture_(\d+)"\]\r?\n(?:[^[]*?)region = Rect2\(([^)]*)\)(?:\r?\nmargin = Rect2\(([^)]*)\))?/g)) {
+      blocks.set(Number(m[1]), { region: m[2].split(",").map(Number), margin: m[3] ? m[3].split(",").map(Number) : [0, 0, 0, 0] });
+    }
+    let wrong = 0;
+    for (const p of placements) {
+      const b = blocks.get(p.index);
+      const want = [p.x, p.y, p.width, p.height].join();
+      const margin = [p.trim.x, p.trim.y, p.trim.sourceW - p.width, p.trim.sourceH - p.height].join();
+      if (!b || b.region.join() !== want || b.margin.join() !== margin) wrong++;
+    }
+    const texture = /\[ext_resource type="Texture2D" path="([^"]+)" id="1_atlas"\]/.exec(tres.text)?.[1] ?? "";
+    const atlasName = String(a.image).split(SEP).pop();
+    const order = [...tres.text.matchAll(/"texture": SubResource\("AtlasTexture_(\d+)"\)/g)].map((m) => Number(m[1]));
+    const inOrder = order.length === expected && order.every((v, k) => v === k);
+    files.push({
+      rel: path.basename(tres.file),
+      file: tres.file,
+      bytes: Buffer.byteLength(tres.text),
+      checks: [
+        { check: "margins", ok: wrong === 0 && blocks.size === expected, detail: wrong ? `${wrong} frames' region or margin disagree with the JSON, so Godot draws them somewhere else` : `${blocks.size} frames, each restored to its ${fw}x${fh} cell` },
+        { check: "texture", ok: texture.endsWith(`/${atlasName}`), detail: `the frames are cut from ${texture || "nothing"}; the atlas is ${atlasName}` },
+        { check: "order", ok: inOrder, detail: inOrder ? "every animation walks its frames in order" : "the animations no longer walk the frames in the atlas's order" },
+      ],
+    });
+  }
+
+  // The C header: each row is x, y, w, h, ox, oy, sw, sh in frame order.
+  const h = await readText(at(a.header));
+  if (h.error) files.push({ rel: String(a.header).split(/[\\/]/).pop(), ...h });
+  else {
+    const table = /_FRAMES\[\d+\] = \{([\s\S]*?)\};/.exec(h.text);
+    const rows = table ? [...table[1].matchAll(/\{([^}]*)\}/g)].map((m) => m[1].split(",").map((v) => Number(v.trim()))) : [];
+    const byIndex = new Map(placements.map((p) => [p.index, p]));
+    let wrong = 0;
+    rows.forEach((r, i) => {
+      const p = byIndex.get(i);
+      if (!p || r.join() !== [p.x, p.y, p.width, p.height, p.trim.x, p.trim.y, p.trim.sourceW, p.trim.sourceH].join()) wrong++;
+    });
+    const cw = Number((/_FRAME_W = (\d+);/.exec(h.text) ?? [])[1]);
+    const ch = Number((/_FRAME_H = (\d+);/.exec(h.text) ?? [])[1]);
+    files.push({
+      rel: path.basename(h.file),
+      file: h.file,
+      bytes: Buffer.byteLength(h.text),
+      checks: [
+        { check: "offsets", ok: rows.length === expected && wrong === 0, detail: wrong || rows.length !== expected ? `${wrong} of ${rows.length} rows disagree with the JSON (${expected} frames expected)` : `${rows.length} rows, each with the offset that puts it back` },
+        { check: "cell", ok: cw === fw && ch === fh, detail: `FRAME_W ${cw}, FRAME_H ${ch}; the cells are ${fw}x${fh}` },
+      ],
+    });
+  }
+  return files;
+}
+
+/**
+ * Holds a sprite pivot to the point the run recorded: every JSON frame's `pivot` and `anchor`,
+ * normalised to its cell, and the header's PIVOT_X and PIVOT_Y. Phaser resets a sprite's origin
+ * from the JSON pivot on every animation frame, so one edited by hand moves the sprite.
+ */
+export async function recheckPivot(a, at) {
+  const out = [];
+  const json = await readText(at(a.json));
+  if (!json.error) {
+    let frames = {};
+    try {
+      frames = JSON.parse(json.text).frames ?? {};
+    } catch {
+      frames = {};
+    }
+    let wrong = 0;
+    let count = 0;
+    for (const f of Object.values(frames)) {
+      count++;
+      const w = f.sourceSize?.w ?? a.frame.width;
+      const h = f.sourceSize?.h ?? a.frame.height;
+      const want = { x: Math.round((a.pivot.x / w) * 10000) / 10000, y: Math.round((a.pivot.y / h) * 10000) / 10000 };
+      for (const key of ["pivot", "anchor"]) if (f[key]?.x !== want.x || f[key]?.y !== want.y) wrong++;
+    }
+    out.push({ rel: `${path.basename(json.file)} (pivot)`, file: json.file, checks: [{ check: "pivot", ok: count > 0 && wrong === 0, detail: wrong ? `${wrong} pivot or anchor values differ from the recorded pivot (${a.pivot.x}, ${a.pivot.y})` : `every frame's pivot and anchor put it at (${a.pivot.x}, ${a.pivot.y})` }] });
+  }
+  const h = await readText(at(a.header));
+  if (!h.error) {
+    const px = Number((/_PIVOT_X = ([-\d.]+)f;/.exec(h.text) ?? [])[1]);
+    const py = Number((/_PIVOT_Y = ([-\d.]+)f;/.exec(h.text) ?? [])[1]);
+    const ok = px === Number(Number(a.pivot.x).toFixed(1)) && py === Number(Number(a.pivot.y).toFixed(1));
+    out.push({ rel: `${path.basename(h.file)} (pivot)`, file: h.file, checks: [{ check: "pivot", ok, detail: `PIVOT_X ${px}, PIVOT_Y ${py}; recorded (${a.pivot.x}, ${a.pivot.y})` }] });
+  }
+  return out;
+}
+
+/**
+ * Re-reads a nine-patch: the art still stretches where the run said (each band measured
+ * again on the pixels, so detail painted into a band since is caught), the .9.png's border
+ * is still one Android will compile and marks the same insets around the same art, and the
+ * StyleBoxTexture still holds the same margins.
+ */
+export async function recheckNinePatch(data, at) {
+  const f = data.facts ?? {};
+  const ins = f.insets ?? {};
+  const pad = f.content ?? ins;
+  const files = [];
+  const art = await recheckFile(at(data.files.image), f.width && f.height ? { width: f.width, height: f.height } : null);
+  let image = null;
+  if (!art.error) {
+    image = decodeImage(await readFile(art.file));
+    const bands = [];
+    for (const [axis, a, start, end] of [["x", f.across, ins.left, (f.width ?? 0) - ins.right], ["y", f.down, ins.top, (f.height ?? 0) - ins.bottom]]) {
+      if (!a?.stretches) continue;
+      // Measured the way the run measured it: found insets by the finder itself, so output nobody
+      // has touched cannot fail on a difference in method; given insets against their own band.
+      let now;
+      if (f.given) now = bandSmear(image, axis, start, end);
+      else {
+        const found = findBand(image, axis, { crisp: f.crisp ?? null });
+        let failing = 0;
+        for (let i = start; i < end; i++) if (!found.ok[i]) failing++;
+        now = { failing, lines: end - start };
+      }
+      bands.push({ axis, now });
+    }
+    // The same rule that made it: a band whose lines are not alike smears, whether the insets
+    // were found or given.
+    const worse = bands.filter((b) => b.now.failing > 0);
+    art.checks = [
+      ...art.checks,
+      {
+        check: "stretches",
+        ok: worse.length === 0,
+        detail: worse.length ? worse.map((b) => `${b.now.failing} of the ${b.now.lines} lines it stretches ${b.axis === "x" ? "across" : "down"} are not alike, so stretching smears them`).join("; ") : `${bands.map((b) => `${b.now.lines} alike lines ${b.axis === "x" ? "across" : "down"}`).join(", ") || "no stretching axis recorded"}`,
+      },
+    ];
+  }
+  files.push({ rel: path.basename(art.file), ...art });
+
+  const np = await recheckFile(at(data.files.android), f.width && f.height ? { width: f.width + 2, height: f.height + 2 } : null);
+  if (!np.error) {
+    const read = readAndroidNinePatch(decodeImage(await readFile(np.file)));
+    const same = (a, b) => Boolean(a && b) && a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom;
+    const artSame = image && read.art && read.art.width === image.width && read.art.height === image.height && read.art.data.every((v, i) => v === image.data[i]);
+    np.checks = [
+      ...np.checks,
+      { check: "border", ok: read.problems.length === 0, detail: read.problems.length ? read.problems.slice(0, 3).join("; ") : "clear or opaque black, one run a side, as aapt2 requires" },
+      { check: "marks", ok: same(read.insets, ins) && same(read.content, pad), detail: `marks ${read.insets ? `${read.insets.left},${read.insets.top},${read.insets.right},${read.insets.bottom}` : "none"} for insets ${ins.left},${ins.top},${ins.right},${ins.bottom}` },
+      { check: "art", ok: Boolean(artSame), detail: artSame ? "the art inside the border is the art itself" : "the art inside the border differs from the nine-patch image" },
+    ];
+  }
+  files.push({ rel: path.basename(np.file), ...np });
+
+  const sb = await readText(at(data.files.stylebox));
+  if (sb.error) files.push({ rel: String(data.files.stylebox).split(/[\\/]/).pop(), ...sb });
+  else {
+    const num = (key) => Number((new RegExp(`^${key} = ([-\\d.]+)`, "m").exec(sb.text) ?? [])[1]);
+    const tex = ["left", "top", "right", "bottom"].map((s) => num(`texture_margin_${s}`));
+    const con = ["left", "top", "right", "bottom"].map((s) => num(`content_margin_${s}`));
+    const want = [ins.left, ins.top, ins.right, ins.bottom];
+    const wantPad = [pad.left, pad.top, pad.right, pad.bottom];
+    const ok = tex.every((v, i) => v === want[i]) && con.every((v, i) => v === wantPad[i]);
+    files.push({ rel: path.basename(sb.file), file: sb.file, bytes: Buffer.byteLength(sb.text), checks: [{ check: "margins", ok, detail: `texture margins ${tex.join(",")} for ${want.join(",")}; content ${con.join(",")}` }] });
+  }
+  return files;
+}
+
+/**
+ * Re-reads a bitmap font: the .fnt still parses (whatever line endings a checkout gave it)
+ * and still holds the characters, kerning and metrics the run wrote; its page is still an
+ * RGBA image, the only kind Godot's BMFont importer reads as "glyph in alpha" (a lossless
+ * optimiser that turns it grey-and-alpha makes Godot refuse the font); and every glyph's
+ * rectangle still lies on the page with ink in it.
+ */
+export async function recheckBitmapFont(data, at) {
+  const f = data.facts ?? {};
+  const files = [];
+  const fnt = await readText(at(data.files.fnt));
+  if (fnt.error) return [{ rel: String(data.files.fnt).split(/[\\/]/).pop(), ...fnt }];
+  const parsed = parseFnt(fnt.text);
+  // A character other than whitespace written as nothing draws nothing in the game.
+  const blank = parsed.chars.filter((c) => (!c.width || !c.height) && !/^\s$/u.test(String.fromCodePoint(c.id))).map((c) => String.fromCodePoint(c.id));
+  // The same rule that made it: a font the run itself failed (characters the font lacks, pieces of
+  // letters lost at crisp sizes) is not shipped by a passing gate.
+  const why = [
+    ...(f.missing?.length ? [`the font lacks ${f.missing.join(" ")}`] : []),
+    ...(f.lost?.length ? [`crisp pixels lost part of ${f.lost.join(" ")}`] : []),
+    ...(f.previewDiffers ? ["text set from the files did not match the glyphs as built"] : []),
+  ];
+  const fntDigest = createHash("sha256").update(fnt.text.replace(/\r\n/g, "\n")).digest("hex").slice(0, 16);
+  const fntChecks = [
+    ...(f.fntDigest ? [{ check: "unchanged", ok: fntDigest === f.fntDigest, detail: fntDigest === f.fntDigest ? "the characters, offsets, advances and kerning the run wrote" : "the .fnt differs from what the run wrote (a glyph's place, offset, advance or a kerning amount was changed)" }] : []),
+    { check: "made", ok: (f.verdict ?? "complete") === "complete", detail: f.verdict && f.verdict !== "complete" ? `the run called it ${f.verdict}: ${why.join("; ") || "see bitmapfont.json"}` : "the run completed" },
+    { check: "blank", ok: blank.length === 0, detail: blank.length ? `${blank.join(" ")} are written with no glyph, so they draw nothing` : "every character but whitespace has a glyph" },
+    { check: "chars", ok: parsed.chars.length === f.written, detail: `${parsed.chars.length} characters; the run wrote ${f.written}` },
+    { check: "kerning", ok: parsed.kernings.length === (f.kernings ?? 0), detail: `${parsed.kernings.length} kerning pairs; the run wrote ${f.kernings ?? 0}` },
+    { check: "metrics", ok: parsed.common.lineHeight === f.lineHeight && parsed.common.base === f.base && parsed.info.size === f.px, detail: `size ${parsed.info.size}, line height ${parsed.common.lineHeight}, base ${parsed.common.base}` },
+  ];
+  files.push({ rel: path.basename(fnt.file), file: fnt.file, bytes: Buffer.byteLength(fnt.text), checks: fntChecks });
+
+  // The XML copy Phaser loads must say the same.
+  if (data.files.xml) {
+    const xml = await readText(at(data.files.xml));
+    if (xml.error) files.push({ rel: String(data.files.xml).split(SEP).pop(), ...xml });
+    else {
+      const chars = (xml.text.match(/<char /g) ?? []).length;
+      const kerns = (xml.text.match(/<kerning /g) ?? []).length;
+      // Held to what the run wrote, not to the .fnt, so a hand edit to one fails only that one.
+      const m = /<common lineHeight="(\d+)" base="(\d+)"/.exec(xml.text);
+      const ok = chars === f.written && kerns === (f.kernings ?? 0) && Boolean(m) && Number(m[1]) === f.lineHeight && Number(m[2]) === f.base;
+      files.push({ rel: path.basename(xml.file), file: xml.file, bytes: Buffer.byteLength(xml.text), checks: [{ check: "same", ok, detail: `${chars} characters and ${kerns} kerning pairs; the run wrote ${f.written} and ${f.kernings ?? 0}` }] });
+    }
+  }
+
+  const pageName = parsed.pages[0]?.file ?? String(data.files.page).split(/[\\/]/).pop();
+  const page = await recheckFile(at(path.join(path.dirname(String(data.files.fnt)), pageName)), parsed.common.scaleW && parsed.common.scaleH ? { width: parsed.common.scaleW, height: parsed.common.scaleH } : null);
+  if (!page.error) {
+    const buffer = await readFile(page.file);
+    const colourType = buffer.length > 25 ? buffer[25] : -1;
+    const hasTrns = buffer.includes(Buffer.from("tRNS"));
+    const godotReads = colourType === 6 || ((colourType === 2 || colourType === 3) && hasTrns);
+    const image = decodeImage(buffer);
+    let outside = 0;
+    let empty = 0;
+    for (const c of parsed.chars) {
+      if (!c.width || !c.height) continue;
+      if (c.x < 0 || c.y < 0 || c.x + c.width > image.width || c.y + c.height > image.height) {
+        outside++;
+        continue;
+      }
+      let ink = false;
+      for (let y = 0; y < c.height && !ink; y++) for (let x = 0; x < c.width && !ink; x++) if (image.data[((c.y + y) * image.width + c.x + x) * 4 + 3]) ink = true;
+      if (!ink) empty++;
+    }
+    const pageDigest = createHash("sha256").update(Buffer.from(image.data)).digest("hex").slice(0, 16);
+    page.checks = [
+      ...page.checks,
+      ...(f.pageDigest ? [{ check: "unchanged", ok: pageDigest === f.pageDigest, detail: pageDigest === f.pageDigest ? "the glyph pixels the run wrote" : "the page's pixels differ from what the run wrote" }] : []),
+      { check: "rgba", ok: godotReads, detail: godotReads ? "an image with alpha, as Godot's BMFont importer needs" : `PNG colour type ${colourType}; Godot refuses a BMFont page without RGBA` },
+      { check: "glyphs", ok: outside === 0 && empty === 0, detail: outside || empty ? `${outside} glyph rectangles fall off the page and ${empty} hold no ink` : "every glyph's rectangle is on the page with ink in it" },
+    ];
+  }
+  files.push({ rel: path.basename(page.file), ...page });
+  return files;
+}
+
 /** Finds the run directories under an output dir: the ones holding a summary, directly or in a kind's subfolder. */
 export async function findRuns(outDir) {
   let entries;
@@ -332,11 +646,19 @@ export async function checkRun({ dir }) {
     if (files.length) results.push({ kind: data.kind || "generate", name: data.name, dir: base, files });
   }
 
-  const sprites = await load("sprites.json", "sprites");
-  if (sprites?.data.atlas?.image) {
-    const { base, data } = sprites;
-    const file = { rel: String(data.atlas.image).split(/[\\/]/).pop(), ...(await recheckFile(candidatesFor(base, { recorded: data.atlas.image, summaryDir: data.dir }), { width: data.atlas.width, height: data.atlas.height })) };
-    results.push({ kind: "sprites", name: data.name, dir: base, files: [file] });
+  // A sprite atlas, and the same atlas packed again by `onmodel atlas`. A grid atlas is held
+  // to its size; a trimmed one to whether every frame still comes back where it was.
+  for (const [summaryFile, kind] of [["sprites.json", "sprites"], ["atlas.json", "atlas"]]) {
+    const run = await load(summaryFile, kind);
+    if (!run?.data?.atlas?.image) continue;
+    const { base, data } = run;
+    const a = data.atlas;
+    const at = (f) => candidatesFor(base, { rel: String(f).split(/[\\/]/).pop(), recorded: f, summaryDir: data.dir });
+    const rel = String(a.image).split(/[\\/]/).pop();
+    const files = [{ rel, ...(await recheckFile(at(a.image), { width: a.width, height: a.height })) }];
+    if (a.layout === "trimmed") files.push(...(await recheckTrimmed(a, at)));
+    if (a.pivot) files.push(...(await recheckPivot(a, at)));
+    results.push({ kind, name: data.name, dir: base, files });
   }
 
   // A traced or set mark: the SVG is the deliverable, so it is the SVG that is re-read.
@@ -439,6 +761,20 @@ export async function checkRun({ dir }) {
     }
     for (const file of files) delete file.first;
     results.push({ kind: "shape", name: data.name, dir: base, files });
+  }
+
+  const ninepatch = await load("ninepatch.json", "ninepatch");
+  if (ninepatch?.data?.files?.image) {
+    const { base, data } = ninepatch;
+    const at = (f) => candidatesFor(base, { rel: String(f).split(/[\\/]/).pop(), recorded: f, summaryDir: data.dir });
+    results.push({ kind: "ninepatch", name: data.name, dir: base, files: await recheckNinePatch(data, at) });
+  }
+
+  const bitmapfont = await load("bitmapfont.json", "bitmapfont");
+  if (bitmapfont?.data?.files?.fnt) {
+    const { base, data } = bitmapfont;
+    const at = (f) => candidatesFor(base, { rel: String(f).split(SEP).pop(), recorded: f, summaryDir: data.dir });
+    results.push({ kind: "bitmapfont", name: data.name, dir: base, files: await recheckBitmapFont(data, at) });
   }
 
   const normal = await load("normal.json", "normal");

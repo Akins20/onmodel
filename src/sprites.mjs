@@ -8,12 +8,11 @@ import { chooseKey, keyOut, quantize, hardenAlpha, fillBackground, blit, resize,
 import { toHex } from "./color.mjs";
 import { sliceStrip, placeFrames, mirror } from "./strip.mjs";
 import { measureAction, paletteDelta, normalisePair, iou, silhouette, HARD_FLAGS } from "./measure.mjs";
-import { packActions, atlasJSON, atlasCSS, atlasHeader, atlasGodot, godotImport, GODOT_FILTER_NEAREST } from "./atlas.mjs";
-import { normalMap } from "./normal.mjs";
+import { packActions } from "./atlas.mjs";
+import { writeAtlasFiles } from "./repack.mjs";
 import { encodeAPNG, encodeGIF } from "./anim.mjs";
 import { generate, preambleParts, slug } from "./generate.mjs";
 import { spriteImageCounts } from "./plan.mjs";
-import { toolVersion } from "./config.mjs";
 import { renderContactHTML, renderSpritesHTML } from "./html.mjs";
 
 /**
@@ -500,6 +499,11 @@ export async function makeSprites({ config, name, subject = null, judge = true, 
   if (!name?.trim()) throw new Error("sprites needs --name: the character's name, the one its model sheet was made under");
   if (!sp.actions.length) throw new Error('sprites needs actions: set "sprite": { "actions": [{ "name": "walk", "frames": 6, "motion": "a steady walk" }] } in the config, or pass --actions "walk:6:a steady walk"');
   const label = slug(name);
+  // Checked before anything is painted: the atlas files are named after the run, so this
+  // name would write sprites.json over the summary after the money was spent.
+  if (label === "sprites") throw new Error('a run named "sprites" would write its atlas over the summary sprites.json; rename the run');
+  // And `onmodel atlas` could never pack it again under its own name, for the same reason.
+  if (label === "atlas") throw new Error('a run named "atlas" could never be packed again by onmodel atlas, whose summary is atlas.json; rename the run');
   const sheet = useSheet ? await loadSheet(config, label, { pick: sheetPick }) : null;
   if (useSheet && !sheet) log(`  no model sheet at ${path.join(config.out, label, "sheet.json")}; frames are held to each other only (run onmodel sheet first to give them a reference)\n`);
   const character = String(subject ?? sheet?.subject ?? "").trim();
@@ -670,42 +674,7 @@ export async function makeSprites({ config, name, subject = null, judge = true, 
 
   let atlas = null;
   if (packed.length) {
-    const sheetImage = packActions(packed);
-    const prefix = label.toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_|_$/g, "") || "SPRITE";
-    atlas = {
-      image: path.join(dir, `${label}.png`),
-      json: path.join(dir, `${label}.json`),
-      css: path.join(dir, `${label}.css`),
-      header: path.join(dir, `${label}.h`),
-      godot: path.join(dir, `${label}.tres`),
-      ...(config.sprite?.normal ? { normal: path.join(dir, `${label}.normal.png`) } : {}),
-      width: sheetImage.image.width,
-      height: sheetImage.image.height,
-      frame: sheetImage.frame,
-      actions: sheetImage.ranges.map((x) => ({ name: x.name, from: x.from, to: x.to, fps: x.fps, loop: x.loop !== false })),
-    };
-    await writeFile(atlas.image, encodePNG(sheetImage.image));
-    await writeFile(`${atlas.image}.import`, godotImport({ pixel: Boolean(config.pixel) }));
-    await writeFile(atlas.json, JSON.stringify(atlasJSON(sheetImage, { file: `${label}.png`, version: await toolVersion() }), null, 2));
-    await writeFile(atlas.css, atlasCSS(sheetImage, { file: `${label}.png`, prefix: label, pixelated: Boolean(config.pixel) }));
-    await writeFile(atlas.header, atlasHeader(sheetImage, { file: `${label}.png`, prefix, guard: `${prefix}_ATLAS_H` }));
-    const res = (n) => (config.sprite?.resPath ? `${String(config.sprite.resPath).replace(/\/+$/, "")}/${n}` : `res://${n}`);
-    if (config.sprite?.normal) {
-      // The whole sheet at once, so every frame's lighting agrees with its neighbours.
-      const lit = normalMap(sheetImage.image, { strength: config.sprite.normalStrength ?? 1, blur: config.pixel ? 0 : 1 });
-      await writeFile(atlas.normal, encodePNG(lit.image));
-      await writeFile(`${atlas.normal}.import`, godotImport({ pixel: Boolean(config.pixel), normalMap: true }));
-      atlas.normalFacts = lit.facts;
-    }
-    await writeFile(
-      atlas.godot,
-      atlasGodot(sheetImage, {
-        file: `${label}.png`,
-        resPath: res(`${label}.png`),
-        normal: config.sprite?.normal ? res(`${label}.normal.png`) : null,
-        filter: config.pixel ? GODOT_FILTER_NEAREST : null,
-      }),
-    );
+    atlas = await writeAtlasFiles(packActions(packed), { dir, label, config, placement: { fill: sp.fill, anchor: sp.anchor } });
   }
 
   const imageSummary = client.summary();
@@ -723,6 +692,8 @@ export async function makeSprites({ config, name, subject = null, judge = true, 
     pixel: config.pixel,
     palette,
     sheet: sheet ? { file: sheet.file, pick: sheet.pick, source: sheet.source, views: sheet.views } : null,
+    // Where every frame stands in its cell, so a later `onmodel atlas` puts the pivot in the same place.
+    placement: { fill: sp.fill, anchor: sp.anchor },
     actions: results.map((r) => r.record),
     // Every action now draws at one scale, so if one of them was painted bigger than the
     // rest the character really is bigger in it. That used to be scaled away silently;

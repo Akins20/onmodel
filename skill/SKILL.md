@@ -87,6 +87,19 @@ bit for a corner and steps at diagonals, which the run reports rather than hides
 the map image: the set laid into a patch of terrain is the only way to see it hold
 together.
 
+## Nine-patch UI and bitmap fonts
+`onmodel ninepatch --mark panel.png` finds the insets that let UI art stretch and writes a
+Godot StyleBoxTexture, an Android `.9.png` (copy only that file into `res/drawable-*/`, never
+resized) and CSS. A generated panel is far bigger than UI needs: pass `--scale 0.25` or so.
+If it refuses because something in the middle splits the band, tell the user to put the
+emblem on top as its own image; do not force `--insets` through it.
+
+`onmodel bitmapfont --font f.ttf --px 16` sets a real font into a `.fnt` and page (and a `.xml`
+copy, the form Phaser loads). For pixel
+art add `--mono`; if it says a piece of a letter was lost, try a bigger `--px` before a lower
+`--cover`. In Godot, set the font size to the `--px` it was made at (a whole multiple for a
+crisp one).
+
 ## Lighting and bodies
 `onmodel normal --mark <art.png>` derives a normal map so a 2D light works, and writes the
 art lit from four corners. LOOK AT THAT STRIP: no number can tell you the bumps read as
@@ -216,6 +229,11 @@ exits 2. It is free; add it to the step that would publish the assets.
 4. **Ship the atlas, not the strips.** Copy `<slug>.png` with the export the engine
    reads (`.json` for Phaser, PixiJS or Godot importers, `.h` for raylib or plain C,
    `.css` for the web) into the project's asset folder in its own convention.
+   For a game, offer `--trim` (or `onmodel atlas --name <slug> --trim`, free, on a run
+   that exists): the same frames, 70 to 85% fewer texels, and each frame restored and
+   compared before it is reported. With `--trim` the CSS reads `<slug>.cells.png`, so ship
+   that for the web. Add `--pivot` only when the user wants the engine to place the sprite
+   by its feet: in Phaser it overrides any origin the game sets.
 5. **When the judge still says redo**, say so plainly with its remaining notes; offer a
    second repair round (`sprite.judgeRepairs: 2`) or a strip rerun of that action
    alone (`--actions` with just it), and let the user decide whether it is good

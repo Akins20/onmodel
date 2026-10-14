@@ -1,5 +1,66 @@
 # Changelog
 
+## Unreleased
+
+- Trimmed sprite atlases (`sprites --trim`, and `onmodel atlas --trim` to pack an existing run
+  again for free): each frame cut to its own pixels and packed, 70 to 85% fewer texels on a
+  typical character, with every export recording where each frame sat in its cell
+  (`spriteSourceSize`/`sourceSize` in the JSON, an AtlasTexture `margin` in the SpriteFrames,
+  `ox, oy, sw, sh` in the C header). Godot 4.7.2 drew trimmed frames back at the full cell size
+  with 0 pixels different, plain and inside the CanvasTexture that pixel art uses. Two traps a
+  naive trim falls into: cut flush, painted art loses the half texel of soft edge that linear
+  filtering blended into the empty cell (an engine only draws the trimmed region), so one clear
+  texel is kept; and frames packed edge to edge bleed, so `--padding` keeps them apart. Every
+  frame is put back from the record and compared with its cell before the run reports, frames
+  that fill their cells and come out bigger once padded are reported as such, and the CSS stays
+  on the untrimmed grid (`<name>.cells.png`) because steps() needs equal frames.
+- `--pivot`: the point every frame stands on, in the JSON (`pivot` for Phaser, `anchor` for
+  PixiJS), the C header, and as the AnimatedSprite2D offset for Godot. Off unless asked for,
+  because a JSON pivot makes Phaser reset each sprite's origin on every animation frame.
+- Nine-patch UI (`onmodel ninepatch`): the insets that let a panel or button stretch, found from
+  the art, written as a Godot StyleBoxTexture (the layout Godot 4.7.2 writes), an Android .9.png
+  (aapt2 compiles it and records the same stretch) and CSS border-image; an existing .9.png
+  converts as it is, red layout-bound ticks included. Crisp art is compared line for line exactly
+  (a 3x3 frame keeps its one-pixel outline, a thick frame or a clear gutter keeps exact insets); soft
+  art is averaged over a pixel and compared with a plain line chosen by a vote in which each
+  candidate, flat or as a ramp, scores the lines that pass the full test against it. Each choice
+  answers a case that broke in review: exact sameness found 23 pixels of a real 324-pixel crop; a
+  full-contrast edge allowance let a tail two pixels deep through; noise read one way let a striped
+  fill pass its own border; a median of the middle let a wide label become the reference; a loose
+  vote took a pill's corner row as plain; noise read from a median called JPEG noiseless and failed
+  plain panels on single blips (now read at the averages' scale from a high percentile, with isolated
+  blips forgiven); and "the plain fill is the commonest line" broke thick pixel frames. A label (even
+  where the gap between its words holds the middle), an emblem, a glow or a dot is refused, including
+  on the other axis when one axis found it in the middle; a header bar is not mistaken for one. The
+  limits are written down rather than hidden: straight-line icons look like inset panels, fine grain
+  reads as noise, a visibly waving outline does not stretch.
+- Bitmap fonts (`onmodel bitmapfont`): a real font at one pixel size as an AngelCode .fnt with its
+  page, and the same as BMFont XML for Phaser; Godot 4.7.2 imports the .fnt as a FontFile and
+  applies its kerning. Text is set from the files read back and from the glyphs as built, against
+  the baseline it was built with, and the two must agree pixel for pixel, every kerning pair
+  included (a pangram alone set 0 of Calibri's 147). Symbol fonts are read through their symbol map. Crisp fonts
+  (`--mono`, `--cover`) are measured against the outline's own pieces, taken at four times the
+  size, so the dot of an i is not mistaken for a broken stroke; a piece that vanished fails.
+- GPOS pair kerning in the font reader, followed the way HarfBuzz follows it: a glyph-pair
+  subtable applies only when it holds the second glyph, otherwise the next subtable decides.
+  Wordmarks and lockups set from a font that kerns only in GPOS now kern; treating the first
+  subtable as final would have kept 175 of Calibri's 611 kerned ASCII pairs.
+- Type fills by non-zero winding, as TrueType glyphs fill, in bitmap fonts and in the wordmarks
+  and lockups' SVG, Android drawable and render: even-odd punched holes where a font's own contours
+  overlap (Bahnschrift) and, now that GPOS kerning applies, where kerned letters touch.
+- A wordmark's canvas is its ink's own bounds joined with the advances: an italic f's overhang, a j
+  reaching left of its pen and the ring of an Å were cropped by a canvas cut to the advances.
+- `check` covers atlases (every trimmed frame restored from the JSON and compared with the grid
+  beside it; each frame's cell, trim mark and rotation; the Godot margins, texture and frame order;
+  the C offsets and cell size; a pivot in the JSON and the header), nine-patches (the bands measured
+  again by the same finder on the pixels, the .9.png border and marks, the StyleBox margins) and
+  bitmap fonts (the .fnt and its page exactly as written, whatever their line endings; an RGBA page;
+  every glyph on the page with ink; the XML copy; a font its own run failed is not passed).
+- A run named `sprites` (or `atlas`) is refused before anything is painted: its atlas files would
+  have written over the run's own summary.
+- The README now says how to build a Phaser animation from the atlas: Phaser's
+  `createFromAseprite` looks frames up by number and finds none of onmodel's named frames.
+
 ## 0.5.0 (2026-10-13)
 
 - Terrain sets (`onmodel terrain`): the 16 or 47 cells a Godot TileMapLayer needs to paint

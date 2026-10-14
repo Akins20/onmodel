@@ -1153,23 +1153,27 @@ export function pathToPolygons(d, { step = 1 } = {}) {
 // ---------------------------------------------------------------- rendering
 
 /**
- * Draws even-odd filled polygons into a coverage mask with 4 sub-scanlines per pixel
- * and exact horizontal coverage, which is enough to compare a vector with its source.
+ * Draws filled polygons into a coverage mask with `sub` sub-scanlines per pixel (4 unless
+ * asked) and exact horizontal coverage, which is enough to compare a vector with its
+ * source. Even-odd by default, which is how onmodel's own traced shapes are drawn; a font's
+ * glyphs fill by non-zero winding, and where two of a glyph's contours overlap even-odd
+ * would punch a hole in the letter, so text asks for `rule: "nonzero"`.
  */
-export function coverage(polys, width, height) {
+export function coverage(polys, width, height, { rule = "evenodd", sub = 4 } = {}) {
   const edges = [];
   for (const poly of polys) {
     for (let i = 0; i < poly.length; i++) {
       const [x1, y1] = poly[i];
       const [x2, y2] = poly[(i + 1) % poly.length];
       if (y1 === y2) continue;
-      edges.push(y1 < y2 ? [x1, y1, x2, y2] : [x2, y2, x1, y1]);
+      edges.push(y1 < y2 ? [x1, y1, x2, y2, 1] : [x2, y2, x1, y1, -1]);
     }
   }
   edges.sort((a, b) => a[1] - b[1]);
   const cov = new Float32Array(width * height);
-  const SUB = 4;
+  const SUB = sub;
   const xs = [];
+  const spans = [];
   // an active edge list: edges join when the scanline reaches their top, leave past their bottom
   let nextEdge = 0;
   let active = [];
@@ -1177,13 +1181,24 @@ export function coverage(polys, width, height) {
     for (let s = 0; s < SUB; s++) {
       const sy = row + (s + 0.5) / SUB;
       xs.length = 0;
+      spans.length = 0;
       while (nextEdge < edges.length && edges[nextEdge][1] <= sy) active.push(edges[nextEdge++]);
       active = active.filter((e) => e[3] > sy);
-      for (const [x1, y1, x2, y2] of active) xs.push(x1 + ((sy - y1) / (y2 - y1)) * (x2 - x1));
-      xs.sort((a, b) => a - b);
-      for (let k = 0; k + 1 < xs.length; k += 2) {
-        const a = Math.max(0, xs[k]);
-        const b = Math.min(width, xs[k + 1]);
+      for (const [x1, y1, x2, y2, dir] of active) xs.push([x1 + ((sy - y1) / (y2 - y1)) * (x2 - x1), dir]);
+      xs.sort((a, b) => a[0] - b[0]);
+      if (rule === "nonzero") {
+        let wind = 0;
+        let from = 0;
+        for (const [x, dir] of xs) {
+          const was = wind;
+          wind += dir;
+          if (was === 0 && wind !== 0) from = x;
+          else if (was !== 0 && wind === 0) spans.push(from, x);
+        }
+      } else for (let k = 0; k + 1 < xs.length; k += 2) spans.push(xs[k][0], xs[k + 1][0]);
+      for (let k = 0; k + 1 < spans.length; k += 2) {
+        const a = Math.max(0, spans[k]);
+        const b = Math.min(width, spans[k + 1]);
         if (b <= a) continue;
         const ia = Math.floor(a);
         const ib = Math.floor(b);
@@ -1259,7 +1274,7 @@ export function renderLayers(layers, width, height, { crisp = false } = {}) {
       out[p + 3] = Math.round(oa * 255);
     }
   };
-  for (const layer of layers) if (layer.d) paint(coverage(pathToPolygons(layer.d), width, height), layer.rgb);
+  for (const layer of layers) if (layer.d) paint(coverage(pathToPolygons(layer.d), width, height, { rule: layer.rule ?? "evenodd" }), layer.rgb);
   for (const layer of layers) {
     if (!layer.strokes?.length) continue;
     // One mask for the whole layer, taking the greater coverage where two of its lines
@@ -1806,7 +1821,9 @@ const xmlEsc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").rep
 /** The SVG: one path per colour, its fill a brand-named CSS variable with the real colour as fallback. */
 export function svgText(layers, w, h, { title = "mark", crisp = false, token = (n) => n } = {}) {
   const colour = (l) => `var(--${token(l.name)},${l.hex})`;
-  const paths = layers.filter((l) => l.d).map((l) => `  <path fill-rule="evenodd" style="fill:${colour(l)}" d="${l.d}"/>`);
+  // Traced shapes keep their holes by even-odd; type fills by non-zero winding, as TrueType does,
+  // so letters a kerning pair pulls into each other overlap as ink rather than punch a hole.
+  const paths = layers.filter((l) => l.d).map((l) => `  <path fill-rule="${l.rule === "nonzero" ? "nonzero" : "evenodd"}" style="fill:${colour(l)}" d="${l.d}"/>`);
   for (const l of layers) {
     for (const s of l.strokes ?? []) {
       paths.push(`  <path fill="none" stroke-width="${r2(s.width)}" stroke-linecap="round" stroke-linejoin="round" style="stroke:${colour(l)}" d="${s.d}"/>`);
@@ -1826,7 +1843,7 @@ export function androidText(layers, w, h, { token = (n) => n, size = 48, fill = 
   const colour = (l) => fill ?? `@color/${resName(token(l.name))}`;
   const paths = layers
     .filter((l) => l.d)
-    .map((l) => `    <path\n        android:fillColor="${colour(l)}"\n        android:fillType="evenOdd"\n        android:pathData="${l.d}" />`);
+    .map((l) => `    <path\n        android:fillColor="${colour(l)}"\n        android:fillType="${l.rule === "nonzero" ? "nonZero" : "evenOdd"}"\n        android:pathData="${l.d}" />`);
   for (const l of layers) {
     for (const s of l.strokes ?? []) {
       paths.push(

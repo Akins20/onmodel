@@ -423,3 +423,20 @@ test("a lockup that cannot be made says which half failed", async () => {
   await assert.rejects(() => makeLockup({ config, text: "", fontPath: fontFile, markPath, log: () => {} }), /--string/);
   await assert.rejects(() => makeLockup({ config, text: "AB", fontPath: null, markPath, log: () => {} }), /--font/);
 });
+
+test("type fills by non-zero winding, so overlapping contours and kerned letters stay ink", async () => {
+  // Even-odd punched holes wherever two contours of a word overlap: Bahnschrift's own outlines,
+  // and letters a GPOS kerning pair pulls into each other.
+  const { makeText } = await import("../src/text.mjs");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const path = (await import("node:path")).default;
+  const dir = await mkdtemp(path.join(tmpdir(), "onmodel-nz-"));
+  const fontFile = path.join(dir, "tiny.ttf");
+  await writeFile(fontFile, tinyFont());
+  const made = await makeText({ config: { out: dir, palette: [], briefText: "" }, text: "AB", fontPath: fontFile, log: () => {} });
+  const svg = await readFile(made.files.svg, "utf8");
+  assert.match(svg, /fill-rule="nonzero"/);
+  assert.ok(!/fill-rule="evenodd"/.test(svg));
+  if (made.files.android) assert.match(await readFile(made.files.android, "utf8"), /android:fillType="nonZero"/);
+});

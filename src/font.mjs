@@ -10,8 +10,8 @@
  * What is parsed: the sfnt table directory, `head` for the units the outlines are drawn
  * in, `maxp` for how many glyphs there are, `cmap` for which glyph a character is,
  * `loca` for where each glyph sits in `glyf`, `glyf` for the outline itself, `hhea` and
- * `hmtx` for how far to step after each one, and `kern` for the pairs that need closing
- * up. Outlines are quadratic, as TrueType stores them, and come out as the cubics the
+ * `hmtx` for how far to step after each one, and GPOS (or the old `kern` table) for the
+ * pairs that need closing up. Outlines are quadratic, as TrueType stores them, and come out as the cubics the
  * rest of onmodel already writes.
  *
  * OpenType's other flavour keeps its outlines in a CFF table as Type 2 charstrings, which
@@ -43,16 +43,19 @@ function readCmap(buf, at) {
   const count = buf.readUInt16BE(at + 2);
   let best = null;
   let bestScore = -1;
+  let symbol = false;
   for (let i = 0; i < count; i++) {
     const rec = at + 4 + i * 8;
     const platform = buf.readUInt16BE(rec);
     const encoding = buf.readUInt16BE(rec + 2);
     const offset = buf.readUInt32BE(rec + 4);
-    // Windows full Unicode first, then Windows BMP, then anything Unicode.
-    const score = platform === 3 && encoding === 10 ? 4 : platform === 3 && encoding === 1 ? 3 : platform === 0 ? 2 : 0;
+    // Windows full Unicode first, then Windows BMP, then anything Unicode, then a Windows symbol
+    // map (dingbat and icon fonts keep their only real map there), then anything else.
+    const score = platform === 3 && encoding === 10 ? 5 : platform === 3 && encoding === 1 ? 4 : platform === 0 ? 3 : platform === 3 && encoding === 0 ? 2 : 0;
     if (score > bestScore) {
       bestScore = score;
       best = at + offset;
+      symbol = platform === 3 && encoding === 0;
     }
   }
   if (best == null) throw new Error("this font has no character map");
@@ -94,6 +97,7 @@ function readCmap(buf, at) {
       for (let c = start; c <= end && c - start < 0x10000; c++) map.set(c, gid + (c - start));
     }
   } else throw new Error(`this font's character map is in format ${format}, which onmodel does not read`);
+  map.symbol = symbol;
   return map;
 }
 
@@ -132,6 +136,207 @@ function readKern(buf, kern) {
     at += length || 14;
   }
   return pairs;
+}
+
+/** Where a glyph sits in a coverage table, or -1 when it is not covered. */
+function coverageIndex(buf, at, gid) {
+  const format = buf.readUInt16BE(at);
+  const count = buf.readUInt16BE(at + 2);
+  if (format === 1) {
+    let lo = 0;
+    let hi = count - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const g = buf.readUInt16BE(at + 4 + mid * 2);
+      if (g === gid) return mid;
+      if (g < gid) lo = mid + 1;
+      else hi = mid - 1;
+    }
+    return -1;
+  }
+  if (format === 2) {
+    for (let i = 0; i < count; i++) {
+      const r = at + 4 + i * 6;
+      const start = buf.readUInt16BE(r);
+      const end = buf.readUInt16BE(r + 2);
+      if (gid >= start && gid <= end) return buf.readUInt16BE(r + 4) + gid - start;
+    }
+  }
+  return -1;
+}
+
+/** A glyph's class in a class definition table; a glyph it does not name is class 0. */
+function glyphClass(buf, at, gid) {
+  const format = buf.readUInt16BE(at);
+  if (format === 1) {
+    const start = buf.readUInt16BE(at + 2);
+    const count = buf.readUInt16BE(at + 4);
+    return gid >= start && gid < start + count ? buf.readUInt16BE(at + 6 + (gid - start) * 2) : 0;
+  }
+  if (format === 2) {
+    const count = buf.readUInt16BE(at + 2);
+    for (let i = 0; i < count; i++) {
+      const r = at + 4 + i * 6;
+      if (gid >= buf.readUInt16BE(r) && gid <= buf.readUInt16BE(r + 2)) return buf.readUInt16BE(r + 4);
+    }
+  }
+  return 0;
+}
+
+const valueSize = (format) => {
+  let n = 0;
+  for (let bit = format; bit; bit >>= 1) n += bit & 1;
+  return n * 2;
+};
+
+/**
+ * What a value record does to the pen: the first glyph's x advance plus the second
+ * glyph's x placement, which for a pair of letters set left to right is the kerning.
+ */
+function valueKern(buf, at, format) {
+  let k = 0;
+  let p = at;
+  if (format & 0x0001) {
+    p += 2; // x placement of the first glyph moves it, not the pen
+  }
+  if (format & 0x0002) p += 2;
+  if (format & 0x0004) k += buf.readInt16BE(p);
+  return k;
+}
+
+/**
+ * Pair kerning from GPOS, which is where nearly every font made this century keeps it.
+ *
+ * Followed the way HarfBuzz follows it, because that is what every engine that shapes text
+ * does. The script is Latin, else the default, and its default language's `kern` feature
+ * names the lookups, which apply in order and add up. Within one lookup the first subtable
+ * that applies wins, and "applies" differs by format: a class-based subtable (format 2)
+ * applies whenever it covers the first glyph, but a glyph-pair subtable (format 1) only
+ * when it has a record for this exact second glyph; otherwise the next subtable is tried.
+ * Fonts put a format 1 subtable of exceptions before a format 2 one of classes on purpose,
+ * and treating format 1 as final dropped most of Calibri's kerning (A with T among them).
+ */
+function readGposKern(buf, gpos) {
+  if (!gpos) return null;
+  const base = gpos.offset;
+  if (base + 10 > buf.length) return null;
+  const scriptList = base + buf.readUInt16BE(base + 4);
+  const featureList = base + buf.readUInt16BE(base + 6);
+  const lookupList = base + buf.readUInt16BE(base + 8);
+  const scripts = new Map();
+  const nScripts = buf.readUInt16BE(scriptList);
+  for (let i = 0; i < nScripts; i++) scripts.set(tag(buf, scriptList + 2 + i * 6), scriptList + buf.readUInt16BE(scriptList + 6 + i * 6));
+  const script = ["latn", "DFLT", "dflt"].map((t) => scripts.get(t)).find((s) => s != null);
+  if (script == null) return null;
+  const langOffset = buf.readUInt16BE(script);
+  if (!langOffset) return null;
+  const lang = script + langOffset;
+  const featureCount = buf.readUInt16BE(lang + 4);
+  const lookups = new Set();
+  for (let i = 0; i < featureCount; i++) {
+    const fi = buf.readUInt16BE(lang + 6 + i * 2);
+    const rec = featureList + 2 + fi * 6;
+    if (tag(buf, rec) !== "kern") continue;
+    const feature = featureList + buf.readUInt16BE(rec + 4);
+    const n = buf.readUInt16BE(feature + 2);
+    for (let k = 0; k < n; k++) lookups.add(buf.readUInt16BE(feature + 4 + k * 2));
+  }
+  if (!lookups.size) return null;
+  const subtables = [...lookups]
+    .sort((a, b) => a - b)
+    .map((index) => {
+      const lookup = lookupList + buf.readUInt16BE(lookupList + 2 + index * 2);
+      const type = buf.readUInt16BE(lookup);
+      const count = buf.readUInt16BE(lookup + 4);
+      const list = [];
+      for (let s = 0; s < count; s++) {
+        let at = lookup + buf.readUInt16BE(lookup + 6 + s * 2);
+        let kind = type;
+        if (kind === 9) {
+          kind = buf.readUInt16BE(at + 2);
+          at += buf.readUInt32BE(at + 4);
+        }
+        if (kind === 2) list.push(at);
+      }
+      return list;
+    })
+    .filter((list) => list.length);
+  if (!subtables.length) return null;
+  const pairIn = (at, first, second) => {
+    const format = buf.readUInt16BE(at);
+    const cov = coverageIndex(buf, at + buf.readUInt16BE(at + 2), first);
+    if (cov < 0) return null;
+    const vf1 = buf.readUInt16BE(at + 4);
+    const vf2 = buf.readUInt16BE(at + 6);
+    const s1 = valueSize(vf1);
+    const s2 = valueSize(vf2);
+    if (format === 1) {
+      const set = at + buf.readUInt16BE(at + 10 + cov * 2);
+      const n = buf.readUInt16BE(set);
+      const size = 2 + s1 + s2;
+      let lo = 0;
+      let hi = n - 1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const rec = set + 2 + mid * size;
+        const g = buf.readUInt16BE(rec);
+        if (g === second) return valueKern(buf, rec + 2, vf1) + (vf2 & 0x0001 ? buf.readInt16BE(rec + 2 + s1) : 0);
+        if (g < second) lo = mid + 1;
+        else hi = mid - 1;
+      }
+      return null;
+    }
+    if (format === 2) {
+      const c1 = glyphClass(buf, at + buf.readUInt16BE(at + 8), first);
+      const c2 = glyphClass(buf, at + buf.readUInt16BE(at + 10), second);
+      const class2Count = buf.readUInt16BE(at + 14);
+      const rec = at + 16 + (c1 * class2Count + c2) * (s1 + s2);
+      return valueKern(buf, rec, vf1) + (vf2 & 0x0001 ? buf.readInt16BE(rec + s1) : 0);
+    }
+    return null;
+  };
+  return (first, second) => {
+    let total = 0;
+    for (const list of subtables) {
+      for (const at of list) {
+        const got = pairIn(at, first, second);
+        if (got != null) {
+          total += got;
+          break;
+        }
+      }
+    }
+    return total;
+  };
+}
+
+/** The family name, from the name table: the typographic family if there is one, else the family. */
+function readFamily(buf, name) {
+  if (!name) return null;
+  const count = buf.readUInt16BE(name.offset + 2);
+  const strings = name.offset + buf.readUInt16BE(name.offset + 4);
+  const found = [];
+  for (let i = 0; i < count; i++) {
+    const r = name.offset + 6 + i * 12;
+    if (r + 12 > buf.length) break;
+    const platform = buf.readUInt16BE(r);
+    const language = buf.readUInt16BE(r + 4);
+    const id = buf.readUInt16BE(r + 6);
+    if (id !== 1 && id !== 16) continue;
+    const len = buf.readUInt16BE(r + 8);
+    const at = strings + buf.readUInt16BE(r + 10);
+    if (at + len > buf.length) continue;
+    let text;
+    if (platform === 3 || platform === 0) {
+      text = "";
+      for (let k = 0; k + 1 < len; k += 2) text += String.fromCharCode(buf.readUInt16BE(at + k));
+    } else if (platform === 1) text = buf.toString("latin1", at, at + len);
+    else continue;
+    // US English Windows names first, so a localised family name does not become the face.
+    found.push({ text, score: (id === 16 ? 4 : 0) + (platform === 3 && language === 0x409 ? 2 : platform === 3 ? 1 : 0) });
+  }
+  found.sort((a, b) => b.score - a.score);
+  return found[0]?.text ?? null;
 }
 
 const ON_CURVE = 1;
@@ -328,8 +533,22 @@ export function loadFont(buffer) {
   const cmap = readCmap(buf, tables.get("cmap").offset);
   const advances = readMetrics(buf, tables.get("hhea"), tables.get("hmtx"), numGlyphs);
   const kern = readKern(buf, tables.get("kern"));
+  // GPOS when the font kerns there, as any shaping engine would, else the old kern table.
+  let gpos = null;
+  try {
+    gpos = readGposKern(buf, tables.get("GPOS"));
+  } catch {
+    gpos = null;
+  }
+  const kernCache = new Map();
+  const kernBetween = (a, b) => {
+    const k = `${a},${b}`;
+    if (!kernCache.has(k)) kernCache.set(k, gpos ? gpos(a, b) : (kern.get(k) ?? 0));
+    return kernCache.get(k);
+  };
   const ascender = buf.readInt16BE(tables.get("hhea").offset + 4);
   const descender = buf.readInt16BE(tables.get("hhea").offset + 6);
+  const lineGap = buf.readInt16BE(tables.get("hhea").offset + 8);
   const outlines = (gid) => readGlyph(buf, tables.get("glyf"), tables.get("loca"), long, gid, numGlyphs);
   // How tall a capital stands. It is what the eye lines a symbol up with, not the
   // ascender, which includes the room left above for accents. Measured off the H rather
@@ -347,12 +566,17 @@ export function loadFont(buffer) {
     numGlyphs,
     ascender,
     descender,
+    lineGap,
     capHeight,
-    glyphFor: (codepoint) => cmap.get(codepoint) ?? 0,
+    family: readFamily(buf, tables.get("name")),
+    kerning: gpos ? "GPOS" : kern.size ? "kern" : null,
+    // A symbol font maps its characters at U+F020 to U+F0FF; the byte code a user types reaches them.
+    glyphFor: (codepoint) => cmap.get(codepoint) ?? (cmap.symbol && codepoint < 0x100 ? cmap.get(codepoint + 0xf000) : undefined) ?? 0,
     advanceOf: (gid) => advances[gid] ?? 0,
-    kernBetween: (a, b) => kern.get(`${a},${b}`) ?? 0,
+    kernBetween,
     contoursOf: outlines,
-    has: (codepoint) => cmap.has(codepoint),
+    has: (codepoint) => cmap.has(codepoint) || (cmap.symbol && codepoint < 0x100 && cmap.has(codepoint + 0xf000)),
+    symbol: Boolean(cmap.symbol),
   };
 }
 

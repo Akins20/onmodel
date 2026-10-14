@@ -75,6 +75,13 @@ export const DEFAULTS = {
     normalStrength: 1,
     // Where the atlas will live in the Godot project, for the paths inside the .tres.
     resPath: null,
+    // Cut each frame to its own pixels and pack them tight, recording where each sat in
+    // its cell; pixels fainter than trimAlpha may be cut, and padding keeps frames apart.
+    trim: false,
+    trimAlpha: 1,
+    padding: 2,
+    // Write the point each frame stands on (the cell's anchor) into the exports.
+    pivot: false,
   },
   // Refuse to start a call that would carry a run past this many dollars.
   budgetUSD: 2,
@@ -155,6 +162,10 @@ function validateSprite(sp) {
   if (typeof sp.normal !== "boolean") throw new Error("sprite.normal must be true or false");
   if (!(typeof sp.normalStrength === "number" && sp.normalStrength > 0 && sp.normalStrength <= 10)) throw new Error("sprite.normalStrength must be from 0 to 10");
   if (sp.resPath != null && !/^res:\/\//.test(String(sp.resPath))) throw new Error('sprite.resPath must start with res:// , such as "res://art/sprites"');
+  if (typeof sp.trim !== "boolean") throw new Error("sprite.trim must be true or false");
+  if (typeof sp.pivot !== "boolean") throw new Error("sprite.pivot must be true or false");
+  if (!(Number.isInteger(sp.trimAlpha) && sp.trimAlpha >= 1 && sp.trimAlpha <= 255)) throw new Error("sprite.trimAlpha (--alpha) must be a whole number from 1 to 255");
+  if (!(Number.isInteger(sp.padding) && sp.padding >= 0 && sp.padding <= 16)) throw new Error("sprite.padding (--padding) must be a whole number from 0 to 16");
   const checkThresholds = (t, where) => {
     if (!isObject(t)) throw new Error(`${where} must be an object`);
     for (const [k, v] of Object.entries(t)) {
@@ -204,6 +215,10 @@ export function flagOverrides(flags = {}) {
   if (flags.frame !== undefined) o.sprite = { ...(o.sprite ?? {}), frame: flags.frame };
   if (flags.actionsList) o.sprite = { ...(o.sprite ?? {}), actions: flags.actionsList };
   else if (flags.actions) o.sprite = { ...(o.sprite ?? {}), actions: parseActions(flags.actions) };
+  if (flags.trim) o.sprite = { ...(o.sprite ?? {}), trim: true };
+  if (flags.pivot) o.sprite = { ...(o.sprite ?? {}), pivot: true };
+  if (flags.alpha !== undefined) o.sprite = { ...(o.sprite ?? {}), trimAlpha: Number(flags.alpha) };
+  if (flags.padding !== undefined) o.sprite = { ...(o.sprite ?? {}), padding: Number(flags.padding) };
   if (flags.out) o.out = flags.out;
   if (flags.brief) o.brief = flags.brief;
   if (flags.budget !== undefined) o.budgetUSD = Number(flags.budget);
