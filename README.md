@@ -317,6 +317,7 @@ and a StyleBoxTexture has no scale of its own, so `--scale` shrinks it before an
 onmodel bitmapfont --font Inter.ttf --px 16                  # smooth
 onmodel bitmapfont --font PixelFont.ttf --px 8 --mono        # crisp, for pixel art
 onmodel bitmapfont --font Inter.ttf --px 24 --chars "0123456789:"
+onmodel bitmapfont --font Bahnschrift.ttf --px 20 --instance "Bold Condensed"   # a variable font
 ```
 
 A real font set at one pixel size into a page of glyphs, written as an AngelCode `.fnt`, which
@@ -428,6 +429,8 @@ Godot loads both files back and reports the right animations, speeds, loops and 
 
 ```bash
 onmodel text --string "ACME" --font Inter-Bold.ttf --px 128
+onmodel text --string "ACME" --font InterVariable.ttf --variation "wght=650,opsz=32"
+onmodel text --string "ACME" --font Bahnschrift.ttf --instance "SemiBold Condensed"
 ```
 
 The image models cannot be trusted with letters, and nothing onmodel measures could catch
@@ -442,11 +445,34 @@ Both flavours of font are read directly. TrueType (.ttf): the character map, the
 with its composite glyphs, advance widths and kerning pairs, with quadratic curves converted
 to the cubics everything else here writes. CFF OpenType (.otf): the Type 2 charstrings each
 glyph is written as, run by an interpreter that covers every drawing operator, both kinds of
-subroutine, hints, flex and seac accents, in name-keyed and CID-keyed fonts and in CFF2 at
-its default instance. It was checked glyph by glyph against FreeType on eight Adobe fonts,
-8,770 outlines, with every bound and glyph id the same. Two things can still go wrong and
-both are checked and reported: a character the font has not got, and a character the font
-claims to have but draws nothing for. Anything else exits 2.
+subroutine, hints, flex and seac accents, in name-keyed and CID-keyed fonts and in CFF2. It
+was checked glyph by glyph against FreeType on eight Adobe fonts, 8,770 outlines, with every
+bound and glyph id the same. Two things can still go wrong and both are checked and reported:
+a character the font has not got, and a character the font claims to have but draws nothing
+for. Anything else exits 2.
+
+A variable font holds a whole family on its axes (weight, width, optical size and any the
+designer added). `--variation "wght=650,wdth=90"` sets it at those coordinates and
+`--instance "SemiBold Condensed"` at one of its named instances; `text`, `lockup` and
+`bitmapfont` all take both. Everything moves together: the outlines (gvar for TrueType, with
+the points a delta leaves out inferred from their neighbours, and CFF2 blends weighted by
+region), the advances (HVAR, or the phantom points when a font has none), the line metrics
+(MVAR) and the kerning (GPOS values whose device tables point into GDEF's variation store),
+with each coordinate clamped to its axis and bent through avar first. The report names the
+setting, and an axis or instance the font does not have is refused with the ones it does.
+Checked against FreeType and HarfBuzz through Godot on five variable fonts (Bahnschrift,
+Segoe UI Variable, Sitka, Cascadia Code, Ubuntu Mono): 13,101 outlines across nine settings
+with every bound the same and every advance but one (a glyph reached only through GSUB, which
+FreeType reports as 0 wide even at the default); every ordered pair of a 73-character set,
+53,290 pairs across ten settings with 6,024 of them kerned, placed where HarfBuzz places them,
+among them the Segoe pairs whose kerning moves along its axes; and with HVAR hidden, all 8,162
+advances read from the phantom points the same as FreeType's, spaces and accented letters
+included. A malformed or hostile font cannot stall or exhaust the reader: a record that does
+not fit its table is ignored (an fvar that does not fit is refused with a message once a setting
+is asked for), a variation store whose 65,535 entries all point at one block of data parses that
+block once, and a glyph that would place more than two million points through its composites,
+or cost more than four million steps to vary, is refused with a message. A font left alone at
+its default never reads avar at all.
 
 ## Lockups
 
@@ -782,8 +808,8 @@ their recorded size. Any failure exits with code 2, naming the file and the rule
 | `normal --mark art.png` | a normal map derived from the art, with the Godot CanvasTexture and the art lit from four corners (free) |
 | `shape --mark art.png` | the collision and occlusion shape traced from the silhouette, simplified to a budget (free) |
 | `tile --mark t.png` | check whether a texture really tiles, close the join if it does not, and write a Godot TileSet (free) |
-| `lockup --mark m.png --string "ACME" --font f.ttf` | a traced symbol and a set wordmark placed together as one combination mark (free) |
-| `text --string "ACME" --font f.ttf` | a wordmark or lettermark set from a real font's own outlines, so the letters cannot come out malformed (free) |
+| `lockup --mark m.png --string "ACME" --font f.ttf` | a traced symbol and a set wordmark placed together as one combination mark; `--variation` or `--instance` for a variable font (free) |
+| `text --string "ACME" --font f.ttf` | a wordmark or lettermark set from a real font's own outlines (.ttf or .otf), so the letters cannot come out malformed; `--variation "wght=700"` or `--instance Bold` for a variable font (free) |
 | `vector --name x` or `--mark file.png` | trace a flat or pixel-art mark into an SVG with brand-named fills and an Android vector drawable, drawn back and measured; `--stroke N` traces line work as centre lines, `--tone N` traces shaded art in N tones, `--mono` cuts it to one colour (free) |
 | `store --name x [--subject "..."]` | an on-brand hero painted and judged, then cropped to the Play feature graphic, the Open Graph and the GitHub previews, no alpha |
 | `edit --name x --change "..."` | continue a candidate's conversation with one change; measured against its parent and judged |
@@ -791,7 +817,7 @@ their recorded size. Any failure exits with code 2, naming the file and the rule
 | `sprites --name x` | each action as a strip, measured against the sheet, repaired, packed and exported; `--trim` and `--pivot` |
 | `atlas --name x [--trim] [--pivot]` | pack a sprites run again, trimmed or with a pivot, every frame put back and compared (free) |
 | `ninepatch --mark panel.png` | the insets that let UI art stretch, found from the art; a Godot StyleBoxTexture, an Android .9.png and CSS (free) |
-| `bitmapfont --font f.ttf --px 16` | a bitmap font from a real font, written as a .fnt and page, set back from disk and compared (free) |
+| `bitmapfont --font f.ttf --px 16` | a bitmap font from a real font, written as a .fnt and page, set back from disk and compared; `--variation` or `--instance` for a variable font (free) |
 | `check [--name x \| --in dir]` | re-check written outputs against the rulebook, no API; no target checks every run under `--out`; exits 2 on failure |
 | `price [--subjects N] [--store] [--sprites "..."]` | what a planned batch would cost before it runs, no API |
 | `cost [--out dir]` | what every run has cost so far, from the ledger |

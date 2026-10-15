@@ -68,7 +68,7 @@ function index(items, cff2 = false) {
 }
 
 /** An sfnt round the CFF table, with a cmap mapping codes to glyph ids, 1000 units to the em. */
-function sfnt(cffTable, { tag = "CFF ", codes, numGlyphs, advance = 600, kind = "OTTO", unitsPerEm = 1000 }) {
+function sfnt(cffTable, { tag = "CFF ", codes, numGlyphs, advance = 600, kind = "OTTO", unitsPerEm = 1000, extra = [] }) {
   const pad4 = (b) => (b.length % 4 ? Buffer.concat([b, Buffer.alloc(4 - (b.length % 4))]) : b);
   const head = Buffer.alloc(54);
   head.writeUInt32BE(0x00010000, 0);
@@ -108,7 +108,7 @@ function sfnt(cffTable, { tag = "CFF ", codes, numGlyphs, advance = 600, kind = 
   cmapHead.writeUInt16BE(3, 4);
   cmapHead.writeUInt16BE(1, 6);
   cmapHead.writeUInt32BE(12, 8);
-  const parts = [[tag, cffTable], ["cmap", Buffer.concat([cmapHead, sub])], ["head", head], ["hhea", hhea], ["hmtx", hmtx], ["maxp", maxp]];
+  const parts = [[tag, cffTable], ["cmap", Buffer.concat([cmapHead, sub])], ["head", head], ["hhea", hhea], ["hmtx", hmtx], ["maxp", maxp], ...extra];
   const dir = Buffer.alloc(12 + parts.length * 16);
   if (kind === "OTTO") dir.write("OTTO", 0, 4, "latin1");
   else dir.writeUInt32BE(0x00010000, 0);
@@ -399,8 +399,9 @@ test("a CID-keyed CFF routes each glyph to its own font dict's subroutines", () 
 });
 
 /** A CFF2 table: no widths, no endchar, a variation store with one region, and a glyph that blends. */
-function cff2Table() {
+function cff2Table({ extra = [] } = {}) {
   const charStrings = [
+    ...extra,
     cs(100, 10, 1, "blend", 0, "rmoveto", 200, "hlineto", 200, "vlineto", -200, "hlineto"), // blended x at the default: 100
     cs(1, "vsindex", 0, 0, "rmoveto", 50, 7, 8, 1, "blend", "hlineto", 60, 7, 8, 1, "blend", "vlineto"), // vsindex 1 selects two regions, so each value carries two deltas
     cs(0, 0, "rmoveto", -107, "callsubr"), // a local subr
@@ -446,6 +447,24 @@ test("a CFF2 font reads at its default instance: blends keep the values and drop
   assert.equal(font.glyphPath(2), "M0 0L40 0L40 40L0 40Z", "a CFF2 local subroutine, closed at the end of the charstring");
 });
 
+test("a CFF2 font set away from its default weights each blend's deltas by its regions", () => {
+  // One weight axis, 100 to 900 round 400. The store's region 0 peaks at +1 (the heavy end),
+  // region 1 at -1 (the light end). Glyph 0 blends 100 with a delta of 10 over region 0; glyph 1
+  // (vsindex 1, both regions) blends 50 with 7 and 8, and 60 with 7 and 8.
+  const u16 = (v) => [(v >> 8) & 255, v & 255];
+  const fx = (v) => [(v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255].map((b) => b);
+  const fixed = (v) => fx(Math.round(v * 65536) >>> 0);
+  const fvar = Buffer.from([...u16(1), ...u16(0), ...u16(16), ...u16(2), ...u16(1), ...u16(20), ...u16(0), ...u16(8), ...Buffer.from("wght", "latin1"), ...fixed(100), ...fixed(400), ...fixed(900), ...u16(0), ...u16(256)]);
+  const at = (variation) => loadFont(sfnt(cff2Table(), { tag: "CFF2", codes: [[0x41, 0], [0x42, 1], [0x43, 2]], numGlyphs: 3, extra: [["fvar", fvar]] }), { variation });
+  assert.equal(at({ wght: 900 }).glyphPath(0), "M110 0L310 0L310 200L110 200Z", "at the heavy end region 0 applies in full");
+  assert.equal(at({ wght: 650 }).glyphPath(0), "M105 0L305 0L305 200L105 200Z", "halfway there, half the delta");
+  assert.equal(at({ wght: 100 }).glyphPath(0), "M100 0L300 0L300 200L100 200Z", "the light end is outside region 0");
+  assert.equal(at({ wght: 900 }).glyphPath(1), "M0 0L57 0L57 67Z", "both values take region 0's delta");
+  assert.equal(at({ wght: 100 }).glyphPath(1), "M0 0L58 0L58 68Z", "and region 1's at the light end");
+  assert.equal(at({ wght: 400 }).glyphPath(1), "M0 0L50 0L50 60Z");
+  assert.deepEqual(at({ wght: 900 }).variation, { wght: 900 });
+});
+
 test("a font with CFF outlines from this machine sets text and bitmap glyphs", async (t) => {
   // Adobe ships CFF fonts with Acrobat, macOS has the STIX fonts, Debian the URW base 35. A file
   // that turns out to be TrueType is passed over for the next; skipped where none is found.
@@ -487,4 +506,12 @@ test("a font with CFF outlines from this machine sets text and bitmap glyphs", a
   const o = rasterGlyph(font, font.glyphFor(0x4f), 32);
   assert.ok(o.width >= 18 && o.height >= 20, `O at 32px is ${o.width}x${o.height}`);
   assert.ok(o.alpha.some((v) => v === 255) && o.alpha.some((v) => v === 0), "the O has a solid ring and a hole");
+});
+
+test("a CFF2 vsindex that names no variation data is refused by name, at the default too", () => {
+  // 0.5 arrives as a 16.16 operand; an outer index into the store must be a whole number.
+  const table = cff2Table({ extra: [cs(0.5, "vsindex", 0, 0, "rmoveto", 50, 7, 8, 1, "blend", "hlineto", 60, "vlineto")] });
+  const font = loadFont(sfnt(table, { tag: "CFF2", codes: [[0x41, 0]], numGlyphs: 4 }));
+  assert.throws(() => font.glyphPath(0), /vsindex of 0\.5, which names no variation data/);
+  assert.equal(font.glyphPath(1), "M100 0L300 0L300 200L100 200Z", "the other glyphs still read");
 });

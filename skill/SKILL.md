@@ -98,7 +98,8 @@ emblem on top as its own image; do not force `--insets` through it.
 copy, the form Phaser loads). For pixel
 art add `--mono`; if it says a piece of a letter was lost, try a bigger `--px` before a lower
 `--cover`. In Godot, set the font size to the `--px` it was made at (a whole multiple for a
-crisp one).
+crisp one). A variable font is set with `--variation "wght=700,wdth=90"` or `--instance "Bold"`;
+the folder name carries the setting.
 
 ## Lighting and bodies
 `onmodel normal --mark <art.png>` derives a normal map so a 2D light works, and writes the
@@ -126,7 +127,11 @@ Set them instead: `onmodel text --string "ACME" --font <file.ttf or .otf> --px 1
 `--tracking` for letter spacing and `--colour` to pick from the brief. The letters are
 the font's own outlines, so the verdict is "exact" unless a character is not in the font
 or is in it and draws nothing, both of which it names. For a combination mark, set the
-wordmark this way and generate only the symbol beside it.
+wordmark this way and generate only the symbol beside it. When the brand's font is a
+variable font (one file, a name like `Inter[wght].ttf` or `InterVariable.ttf`), set the
+weight the brief asks for with `--variation "wght=650"` or a named `--instance`, on `text`
+and `lockup` alike; ask for an instance that does not exist and the error lists the ones
+that do, and an unknown axis lists the axes with their ranges.
 
 ## Combination marks
 `onmodel lockup --mark <logo.png> --string "ACME" --font <file.ttf or .otf>` places a traced

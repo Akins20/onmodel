@@ -2,7 +2,7 @@ import { writeFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { decodeImage, encodePNG } from "./image.mjs";
 import { slug } from "./generate.mjs";
-import { loadFont } from "./font.mjs";
+import { loadFont, describeVariation, variationSlug } from "./font.mjs";
 import { createHash } from "node:crypto";
 import { ASCII, buildBitmapFont, writeFnt, writeFntXML, parseFnt, setText, fntFromBuild } from "./bmfont.mjs";
 
@@ -22,7 +22,7 @@ const digest = (v) => createHash("sha256").update(v).digest("hex").slice(0, 16);
 const PANGRAMS = ["The quick brown fox jumps over the lazy dog.", "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG!", "0123456789 ?&@#%$*+-=/()[]{}<>,;:'\"_|~^`\\"];
 const MAX_PREVIEW = 4096;
 
-export async function makeBitmapFont({ config, fontPath, px = 16, chars = null, mono = false, cover = 50, kerning = true, name = null, log = (s) => process.stderr.write(s) }) {
+export async function makeBitmapFont({ config, fontPath, px = 16, chars = null, mono = false, cover = 50, kerning = true, variation = null, instance = null, name = null, log = (s) => process.stderr.write(s) }) {
   if (!fontPath) throw new Error("bitmapfont needs --font <a .ttf or .otf file>");
   let buffer;
   try {
@@ -30,13 +30,19 @@ export async function makeBitmapFont({ config, fontPath, px = 16, chars = null, 
   } catch (err) {
     throw new Error(`could not read the font ${fontPath}: ${err.message}`);
   }
-  const font = loadFont(buffer);
+  const font = loadFont(buffer, { variation, instance });
   if (chars != null && !String(chars).length) throw new Error("--chars is empty; leave it out for printable ASCII, or give the characters to set");
   const set = chars ?? ASCII;
   const unique = [...new Set(Array.from(set))];
   if (unique.length > 512) throw new Error(`${unique.length} characters is more than one bitmap font page should carry; pass up to 512 with --chars`);
   const fileBase = path.basename(fontPath).replace(/\.[^.]+$/, "");
-  const label = slug(name ?? `${fileBase}-${px}${mono ? "-mono" : ""}`);
+  // The setting, size and crispness go on the end untruncated, so two settings of one long-named
+  // variable font cannot share a folder; only the file's name gives way. A setting too long to
+  // spell out is named by a short digest of its coordinates.
+  const setting = variationSlug(font);
+  const tail = slug(`${setting ? `${setting}-` : ""}${px}${mono ? "-mono" : ""}`);
+  const suffix = tail.length <= 40 ? tail : `${digest(JSON.stringify(font.variation)).slice(0, 8)}-${px}${mono ? "-mono" : ""}`;
+  const label = name != null ? slug(name) : `${slug(fileBase).slice(0, Math.max(1, 59 - suffix.length)).replace(/-+$/, "")}-${suffix}`;
   // Built before anything is written, so a font that cannot fit its page leaves no folder behind.
   const bm = buildBitmapFont(font, { px, chars: set, mono, cover, kerning });
   const dir = path.join(config.out, label, "bitmapfont");
@@ -93,6 +99,9 @@ export async function makeBitmapFont({ config, fontPath, px = 16, chars = null, 
   const facts = {
     px,
     face,
+    setting: describeVariation(font),
+    variation: font.variation,
+    instance: font.instance,
     mono,
     cover: mono ? cover : null,
     lineHeight: bm.lineHeight,

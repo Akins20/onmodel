@@ -20,6 +20,7 @@ import { makeTerrain } from "../src/terrainset.mjs";
 import { makeAtlas } from "../src/repack.mjs";
 import { makeNinePatch } from "../src/ninepatchset.mjs";
 import { makeBitmapFont } from "../src/bitmapfontset.mjs";
+import { parseVariation } from "../src/variation.mjs";
 import { makeVector } from "../src/vectorize.mjs";
 import { checkRun, findRuns, failuresOf } from "../src/check.mjs";
 
@@ -47,15 +48,17 @@ Commands
                                     chosen from the art, or set it with [--threshold 128]), with [--tone N] for
                                     N levels; [--noise 40] ignore shapes under that many pixels (free)
   text --string "ACME" --font f.ttf  a wordmark or lettermark set from a real font, not drawn: the letters are
-       [--name slug] [--px 128]      the type designer's own outlines, so they cannot come out malformed
-       [--tracking 20] [--colour #hex] [--no-kerning]                                  (free)
+       [--name slug] [--px 128]      the type designer's own outlines, so they cannot come out malformed;
+       [--tracking 20] [--colour #hex] [--no-kerning]   a variable font is set by [--variation "wght=700,wdth=90"]
+       [--instance Bold]             or a named instance, its advances and kerning moving with it (free)
   terrain --mark fill.png or --name run  the 16 or 47 cells a Godot TileMapLayer needs to paint a
           [--mode both|sides]        material, composited from one seamless fill (scaled to one cell)
           [--cell 32] [--round 4]    with every peering bit derived, then every pair of cells that can
           [--terrain name]           touch is checked edge by edge; --round is clamped so edges stay exact (free)
   bitmapfont --font f.ttf [--px 16]  a bitmap font set from a real font's outlines, written as an AngelCode
           [--chars "..."] [--mono]   .fnt with its page (Godot imports it as a FontFile); text set from the
-          [--cover 50] [--no-kerning] files read back must match the glyphs as built, pixel for pixel (free)
+          [--cover 50] [--no-kerning] files read back must match the glyphs as built, pixel for pixel;
+          [--variation "wght=700"] [--instance Bold]  a variable font set at those coordinates or that instance (free)
   ninepatch --mark panel.png or --name run  a panel, button or frame that stretches to any size: the
           [--scale 0.25]             insets found from the art (the bands whose lines are alike),
           [--insets l,t,r,b]         written as a Godot StyleBoxTexture, an Android .9.png and CSS
@@ -73,7 +76,8 @@ Commands
                                     --normal derives a tiling normal map and a CanvasTexture too (free)
   lockup --string "ACME" --font f.ttf  a traced symbol and a set wordmark placed together as one mark
          --mark logo.png or --name run  [--layout beside|above] [--px 128] [--gap 0.5] [--symbol 1.2]
-                                    the symbol is sized and centred on the cap height, not the em (free)
+         [--variation "wght=700"] [--instance Bold]  the symbol is sized and centred on the cap height, not
+                                    the em; a variable font is set at those coordinates or that instance (free)
   store --name x [--subject "..."]  an on-brand hero painted, judged, then cropped to each store's exact
         [--targets play-feature,og,github] [--mark logo.png]    canvas as a 24-bit PNG (no alpha)
         [--count 3] [--size 2K] [--budget 2] [--no-judge]
@@ -147,6 +151,8 @@ const OPTIONS = {
   colour: { type: "string" },
   color: { type: "string" },
   "no-kerning": { type: "boolean" },
+  variation: { type: "string" },
+  instance: { type: "string" },
   layout: { type: "string" },
   gap: { type: "string" },
   symbol: { type: "string" },
@@ -328,10 +334,12 @@ async function main() {
         tracking: num(flags.tracking, "tracking", -500, 2000) ?? 0,
         colour: flags.colour ?? flags.color ?? null,
         kerning: !flags["no-kerning"],
+        variation: flags.variation != null ? parseVariation(flags.variation) : null,
+        instance: flags.instance ?? null,
       });
       const f = result.facts;
       const lines = [
-        `${result.name} text in ${result.dir}: ${f.verdict} ("${f.text}" set in ${f.font}, ${f.curves} curves, ${Math.max(1, Math.round(f.bytes / 1024))} KB)`,
+        `${result.name} text in ${result.dir}: ${f.verdict} ("${f.text}" set in ${f.font}${f.setting ? ` as ${f.setting}` : ""}, ${f.curves} curves, ${Math.max(1, Math.round(f.bytes / 1024))} KB)`,
         f.verdict === "exact"
           ? "the letters are the font's own outlines, so there is nothing to measure and nothing to drift"
           : `${[f.missing.length ? `not in the font: ${f.missing.join(" ")}` : null, f.blank.length ? `in the font but drawn empty: ${f.blank.join(" ")}` : null, f.inkShare ? null : "the path carries no ink at all"].filter(Boolean).join("; ")}`,
@@ -362,12 +370,14 @@ async function main() {
         gap: num(flags.gap, "gap", 0, 8) ?? 0.5,
         symbol: num(flags.symbol, "symbol", 0.1, 8) ?? 1.2,
         kerning: !flags["no-kerning"],
+        variation: flags.variation != null ? parseVariation(flags.variation) : null,
+        instance: flags.instance ?? null,
         detail: flags.detail ?? null,
       });
       const f = result.facts;
       const lines = [
         `${result.name} lockup in ${result.dir}: ${f.verdict} (${f.layout}, ${f.width}x${f.height}, ${f.curves} curves, ${Math.max(1, Math.round(f.bytes / 1024))} KB)`,
-        `symbol ${f.symbol.width}x${f.symbol.height} from ${f.symbol.from} (${f.symbol.verdict}), "${f.word.text}" set in ${f.word.font} at ${f.word.px}, cap height ${f.word.capHeight}, gap ${f.gap}`,
+        `symbol ${f.symbol.width}x${f.symbol.height} from ${f.symbol.from} (${f.symbol.verdict}), "${f.word.text}" set in ${f.word.font}${f.word.setting ? ` as ${f.word.setting}` : ""} at ${f.word.px}, cap height ${f.word.capHeight}, gap ${f.gap}`,
         ...(f.word.missing.length ? [`not in the font: ${f.word.missing.join(" ")}`] : []),
         `fills: ${result.tokens.map((t) => `--${t.name}`).join(", ")}`,
       ];
@@ -590,10 +600,21 @@ async function main() {
       const cover = flags.cover == null ? 50 : Number(flags.cover);
       if (!(Number.isInteger(cover) && cover >= 1 && cover <= 99)) throw new Error("--cover must be a whole percentage from 1 to 99");
       if (flags.cover != null && !flags.mono) throw new Error("--cover sets where a crisp pixel starts, so it needs --mono");
-      const result = await makeBitmapFont({ config, fontPath: flags.font ?? null, px, chars: flags.chars ?? null, mono: Boolean(flags.mono), cover, kerning: !flags["no-kerning"], name: flags.name ?? null });
+      const result = await makeBitmapFont({
+        config,
+        fontPath: flags.font ?? null,
+        px,
+        chars: flags.chars ?? null,
+        mono: Boolean(flags.mono),
+        cover,
+        kerning: !flags["no-kerning"],
+        variation: flags.variation != null ? parseVariation(flags.variation) : null,
+        instance: flags.instance ?? null,
+        name: flags.name ?? null,
+      });
       const f = result.facts;
       const lines = [
-        `${result.name} bitmap font in ${result.dir}: ${f.verdict} (${f.written} of ${f.requested} characters at ${f.px}px${f.mono ? `, crisp at ${f.cover}% cover` : ""}, ${f.pageWidth}x${f.pageHeight} page)`,
+        `${result.name} bitmap font in ${result.dir}: ${f.verdict} (${f.written} of ${f.requested} characters at ${f.px}px${f.setting ? `, ${f.setting}` : ""}${f.mono ? `, crisp at ${f.cover}% cover` : ""}, ${f.pageWidth}x${f.pageHeight} page)`,
         `line height ${f.lineHeight}, baseline ${f.base} down; ${f.kernings} kerning pairs${f.kerning === "off" ? " (kerning off)" : f.kerning ? ` from the font's ${f.kerning}` : ", the font has none"}`,
         f.previewDiffers ? `text set from the files on disk differs from the glyphs as built in ${f.previewDiffers} pixels, so a metric was written wrong` : `text set from the .fnt and page read back matches the glyphs as built, pixel for pixel`,
         ...(f.missing.length ? [`the font has no ${f.missing.map((c) => JSON.stringify(c)).join(" ")}; they are left out, not drawn with something else`] : []),

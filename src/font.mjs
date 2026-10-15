@@ -20,6 +20,7 @@
  */
 
 import { readCFF } from "./cff.mjs";
+import { readFvar, readAvar, normalise, readHVAR, readMVAR, readGdefStore, readGvar, storeScalars, storeDelta } from "./variation.mjs";
 
 const tag = (buf, at) => buf.toString("latin1", at, at + 4);
 
@@ -191,19 +192,39 @@ const valueSize = (format) => {
 };
 
 /**
- * What a value record does to the pen: the first glyph's x advance plus the second
- * glyph's x placement, which for a pair of letters set left to right is the kerning.
+ * What a value record holds for the pen: its x placement and x advance, each with the delta
+ * its device table adds in a variable font (`dev` reads one at an absolute offset, or is null).
+ * Device offsets are relative to the record's parent table, `base`.
  */
-function valueKern(buf, at, format) {
-  let k = 0;
+function valueParts(buf, at, format, base, dev) {
   let p = at;
+  let xPla = 0;
+  let xAdv = 0;
   if (format & 0x0001) {
-    p += 2; // x placement of the first glyph moves it, not the pen
+    xPla = buf.readInt16BE(p);
+    p += 2;
   }
   if (format & 0x0002) p += 2;
-  if (format & 0x0004) k += buf.readInt16BE(p);
-  return k;
+  if (format & 0x0004) {
+    xAdv = buf.readInt16BE(p);
+    p += 2;
+  }
+  if (format & 0x0008) p += 2;
+  if (format & 0x0010) {
+    const off = buf.readUInt16BE(p);
+    if (off && dev) xPla += dev(base + off);
+    p += 2;
+  }
+  if (format & 0x0020) p += 2;
+  if (format & 0x0040) {
+    const off = buf.readUInt16BE(p);
+    if (off && dev) xAdv += dev(base + off);
+  }
+  return { xPla, xAdv };
 }
+
+/** The first glyph's advance plus the second's placement: for a pair set left to right, the kerning. */
+const pairKern = (buf, rec1, vf1, rec2, vf2, base, dev) => valueParts(buf, rec1, vf1, base, dev).xAdv + valueParts(buf, rec2, vf2, base, dev).xPla;
 
 /**
  * Pair kerning from GPOS, which is where nearly every font made this century keeps it.
@@ -217,7 +238,7 @@ function valueKern(buf, at, format) {
  * Fonts put a format 1 subtable of exceptions before a format 2 one of classes on purpose,
  * and treating format 1 as final dropped most of Calibri's kerning (A with T among them).
  */
-function readGposKern(buf, gpos) {
+function readGposKern(buf, gpos, dev = null) {
   if (!gpos) return null;
   const base = gpos.offset;
   if (base + 10 > buf.length) return null;
@@ -281,7 +302,7 @@ function readGposKern(buf, gpos) {
         const mid = (lo + hi) >> 1;
         const rec = set + 2 + mid * size;
         const g = buf.readUInt16BE(rec);
-        if (g === second) return valueKern(buf, rec + 2, vf1) + (vf2 & 0x0001 ? buf.readInt16BE(rec + 2 + s1) : 0);
+        if (g === second) return pairKern(buf, rec + 2, vf1, rec + 2 + s1, vf2, set, dev);
         if (g < second) lo = mid + 1;
         else hi = mid - 1;
       }
@@ -292,7 +313,7 @@ function readGposKern(buf, gpos) {
       const c2 = glyphClass(buf, at + buf.readUInt16BE(at + 10), second);
       const class2Count = buf.readUInt16BE(at + 14);
       const rec = at + 16 + (c1 * class2Count + c2) * (s1 + s2);
-      return valueKern(buf, rec, vf1) + (vf2 & 0x0001 ? buf.readInt16BE(rec + s1) : 0);
+      return pairKern(buf, rec, vf1, rec + s1, vf2, at, dev);
     }
     return null;
   };
@@ -311,19 +332,18 @@ function readGposKern(buf, gpos) {
   };
 }
 
-/** The family name, from the name table: the typographic family if there is one, else the family. */
-function readFamily(buf, name) {
-  if (!name) return null;
+/** The name table's strings by id, US English Windows names first so a localised one does not win. */
+function readNames(buf, name) {
+  const best = new Map();
+  if (!name || name.offset + 6 > buf.length) return (id) => best.get(id)?.text ?? null;
   const count = buf.readUInt16BE(name.offset + 2);
   const strings = name.offset + buf.readUInt16BE(name.offset + 4);
-  const found = [];
   for (let i = 0; i < count; i++) {
     const r = name.offset + 6 + i * 12;
     if (r + 12 > buf.length) break;
     const platform = buf.readUInt16BE(r);
     const language = buf.readUInt16BE(r + 4);
     const id = buf.readUInt16BE(r + 6);
-    if (id !== 1 && id !== 16) continue;
     const len = buf.readUInt16BE(r + 8);
     const at = strings + buf.readUInt16BE(r + 10);
     if (at + len > buf.length) continue;
@@ -333,12 +353,14 @@ function readFamily(buf, name) {
       for (let k = 0; k + 1 < len; k += 2) text += String.fromCharCode(buf.readUInt16BE(at + k));
     } else if (platform === 1) text = buf.toString("latin1", at, at + len);
     else continue;
-    // US English Windows names first, so a localised family name does not become the face.
-    found.push({ text, score: (id === 16 ? 4 : 0) + (platform === 3 && language === 0x409 ? 2 : platform === 3 ? 1 : 0) });
+    const score = platform === 3 && language === 0x409 ? 2 : platform === 3 ? 1 : 0;
+    if (!best.has(id) || best.get(id).score < score) best.set(id, { text, score });
   }
-  found.sort((a, b) => b.score - a.score);
-  return found[0]?.text ?? null;
+  return (id) => best.get(id)?.text ?? null;
 }
+
+/** The family name: the typographic family if there is one, else the family. */
+const readFamily = (nameOf) => nameOf(16) ?? nameOf(1);
 
 const ON_CURVE = 1;
 const X_SHORT = 2;
@@ -347,24 +369,44 @@ const REPEAT = 8;
 const X_SAME = 16;
 const Y_SAME = 32;
 
+// The most points one glyph may place, its composites' copies included. A real glyph needs a
+// few thousand; nested composites a few hundred bytes long could otherwise ask for billions.
+const GLYPH_POINTS = 1 << 21;
+
+const spend = (budget, n) => {
+  budget.left -= n;
+  if (budget.left < 0) throw new Error(`this font's glyph ${budget.gid} places more than ${GLYPH_POINTS.toLocaleString("en")} points through its composites, so the font is malformed`);
+};
+
 /**
  * One glyph's contours, as points with a flag for whether each sits on the curve.
  *
  * A composite glyph is other glyphs placed by an offset, which is how an accented letter
  * is usually stored; those are read through to their parts, to a bounded depth, because
  * nothing stops a broken font pointing a glyph at itself.
+ *
+ * In a variable font set away from its default, `vary(gid, pointCount, ends, xs, ys)` gives
+ * the deltas of the glyph's points (its components' offsets, for a composite) with the four
+ * phantom points last; `met`, when given, receives the advance change the phantoms carry.
  */
-function readGlyph(buf, glyf, loca, long, index, numGlyphs, depth = 0) {
+function readGlyph(buf, glyf, loca, long, index, numGlyphs, depth = 0, vary = null, met = null, budget = { left: GLYPH_POINTS, gid: index }) {
   if (index < 0 || index >= numGlyphs || depth > 5) return [];
   const start = long ? buf.readUInt32BE(loca.offset + index * 4) : buf.readUInt16BE(loca.offset + index * 2) * 2;
   const end = long ? buf.readUInt32BE(loca.offset + index * 4 + 4) : buf.readUInt16BE(loca.offset + index * 2 + 2) * 2;
-  if (end <= start) return [];
   const at = glyf.offset + start;
-  if (at + 10 > buf.length) return [];
+  if (end <= start || at + 10 > buf.length) {
+    // An empty glyph (a space) still has its four phantom points in gvar, and without HVAR they
+    // carry its advance.
+    if (vary && met) {
+      const moved = vary(index, 4, [], [], []);
+      if (moved) met.advance = moved.dx[1] - moved.dx[0];
+    }
+    return [];
+  }
   const contourCount = buf.readInt16BE(at);
 
   if (contourCount < 0) {
-    const out = [];
+    const parts = [];
     let p = at + 10;
     for (;;) {
       if (p + 4 > buf.length) break;
@@ -402,12 +444,35 @@ function readGlyph(buf, glyf, loca, long, index, numGlyphs, depth = 0) {
         p += 8;
       }
       // ARGS_ARE_XY_VALUES is the common case; point matching is not supported.
-      if (flags & 2) {
-        for (const contour of readGlyph(buf, glyf, loca, long, glyphIndex, numGlyphs, depth + 1)) {
-          out.push(contour.map((pt) => ({ x: a * pt.x + c * pt.y + dx, y: b * pt.x + d * pt.y + dy, on: pt.on })));
-        }
-      }
+      parts.push({ glyphIndex, dx, dy, a, b, c, d, place: Boolean(flags & 2), metrics: Boolean(flags & 0x200) });
       if (!(flags & 0x20)) break;
+    }
+    spend(budget, parts.length);
+    // Each component is one point to gvar: its offset moves.
+    if (vary) {
+      const n = parts.length;
+      const moved = vary(index, n + 4, [], parts.map((q) => q.dx), parts.map((q) => q.dy));
+      if (moved) {
+        parts.forEach((q, i) => {
+          q.dx += moved.dx[i];
+          q.dy += moved.dy[i];
+        });
+        if (met) met.advance = moved.dx[n + 1] - moved.dx[n];
+      }
+    }
+    const out = [];
+    for (const q of parts) {
+      if (!q.place) continue;
+      // A component marked USE_MY_METRICS lends the composite its metrics, varied ones included,
+      // as FreeType and HarfBuzz both read it.
+      const own = q.metrics && met ? { advance: 0, from: null } : null;
+      for (const contour of readGlyph(buf, glyf, loca, long, q.glyphIndex, numGlyphs, depth + 1, vary, own, budget)) {
+        out.push(contour.map((pt) => ({ x: q.a * pt.x + q.c * pt.y + q.dx, y: q.b * pt.x + q.d * pt.y + q.dy, on: pt.on })));
+      }
+      if (own) {
+        met.advance = own.advance;
+        met.from = own.from ?? q.glyphIndex;
+      }
     }
     return out;
   }
@@ -419,6 +484,7 @@ function readGlyph(buf, glyf, loca, long, index, numGlyphs, depth = 0) {
     p += 2;
   }
   const points = ends.length ? ends[ends.length - 1] + 1 : 0;
+  spend(budget, points);
   p += 2 + buf.readUInt16BE(p); // the hinting instructions, which outlines do not need
   const flags = new Uint8Array(points);
   for (let i = 0; i < points; ) {
@@ -452,11 +518,21 @@ function readGlyph(buf, glyf, loca, long, index, numGlyphs, depth = 0) {
     }
     ys[i] = y;
   }
+  let fx = xs;
+  let fy = ys;
+  if (vary) {
+    const moved = vary(index, points + 4, ends, xs, ys);
+    if (moved) {
+      fx = Float64Array.from(xs, (v, i) => v + moved.dx[i]);
+      fy = Float64Array.from(ys, (v, i) => v + moved.dy[i]);
+      if (met) met.advance = moved.dx[points + 1] - moved.dx[points];
+    }
+  }
   const out = [];
   let from = 0;
   for (const endAt of ends) {
     const contour = [];
-    for (let i = from; i <= endAt && i < points; i++) contour.push({ x: xs[i], y: ys[i], on: Boolean(flags[i] & ON_CURVE) });
+    for (let i = from; i <= endAt && i < points; i++) contour.push({ x: fx[i], y: fy[i], on: Boolean(flags[i] & ON_CURVE) });
     if (contour.length) out.push(contour);
     from = endAt + 1;
   }
@@ -517,8 +593,14 @@ export function contourToPath(contour, at = (p) => [p.x, p.y]) {
   return `${d}Z`;
 }
 
-/** A font, opened once and asked for glyphs by character. */
-export function loadFont(buffer) {
+const trimTags = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k.trim(), v]));
+
+/**
+ * A font, opened once and asked for glyphs by character. A variable font is set by `variation`
+ * (axis coordinates, such as { wght: 700 }) or `instance` (a named instance), the coordinates
+ * winning where both name an axis; without either it reads at its default.
+ */
+export function loadFont(buffer, { variation = null, instance = null } = {}) {
   const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
   const tables = tableDirectory(buf);
   for (const need of ["head", "maxp", "cmap", "hhea", "hmtx"]) {
@@ -533,11 +615,63 @@ export function loadFont(buffer) {
   const numGlyphs = buf.readUInt16BE(tables.get("maxp").offset + 4);
   const cmap = readCmap(buf, tables.get("cmap").offset);
   const advances = readMetrics(buf, tables.get("hhea"), tables.get("hmtx"), numGlyphs);
+  const names = readNames(buf, tables.get("name"));
+
+  // Where on its axes a variable font is set. Nothing below engages unless some coordinate is
+  // away from its default, so a static font, and a variable one left alone, read as before.
+  const fvar = readFvar(buf, tables.get("fvar"), names);
+  const asked = Boolean(variation || instance != null);
+  if (asked && !fvar) {
+    throw new Error(tables.has("fvar") ? "this font's fvar table is malformed, so its axes cannot be read and --variation and --instance cannot apply" : "this font does not vary: it has no axes, so --variation and --instance cannot apply");
+  }
+  let coords = {};
+  let chosen = null;
+  if (fvar && instance != null) {
+    const key = (s) => String(s ?? "").toLowerCase().replace(/[\s_-]+/g, "");
+    const found = fvar.instances.find((inst) => key(inst.name) === key(instance));
+    if (!found) throw new Error(`this font has no instance named "${instance}"; it has ${fvar.instances.map((inst) => inst.name).filter(Boolean).join(", ") || "none that is named"}`);
+    coords = { ...found.coords };
+    chosen = found;
+  }
+  if (fvar && variation) {
+    for (const [given, value] of Object.entries(variation)) {
+      const axis = fvar.axes.find((a) => a.tag.trim() === String(given).trim());
+      if (!axis) throw new Error(`this font has no "${String(given).trim()}" axis; it has ${fvar.axes.map((a) => `${a.tag.trim()} (${a.min} to ${a.max}, ${a.def} by default)`).join(", ")}`);
+      if (!Number.isFinite(value)) throw new Error(`the ${axis.tag.trim()} coordinate must be a number`);
+      coords[axis.tag] = value;
+    }
+  }
+  // avar is read only when a setting was asked for: left alone, a variable font sits at its default.
+  const atDefault = () => ({ norm: new Float64Array(fvar.axes.length), applied: Object.fromEntries(fvar.axes.map((a) => [a.tag, a.def])) });
+  const setting = fvar ? (asked ? normalise(fvar.axes, readAvar(buf, tables.get("avar"), fvar.axes.length), coords) : atDefault()) : null;
+  const norm = setting?.norm ?? null;
+  const varies = Boolean(norm && norm.some((v) => v !== 0));
+  const applied = setting?.applied ?? null;
+  // Named by the coordinates as applied, not as asked: an instance asked for keeps its own name
+  // while it is still in force (two instances may share coordinates), and one moved away from by
+  // coordinates given beside it is no longer that instance.
+  const sameCoords = (a, b) => fvar.axes.every((axis) => Math.abs((a[axis.tag] ?? axis.def) - (b[axis.tag] ?? axis.def)) < 1e-6);
+  const instanceName = fvar ? (chosen && sameCoords(chosen.coords, applied) ? chosen.name : (fvar.instances.find((inst) => sameCoords(inst.coords, applied))?.name ?? null)) : null;
+
+  // The stores each kind of delta lives in, each weighted once for these coordinates.
+  const scaled = (store) => (store && varies ? { store, scalars: storeScalars(store, norm) } : null);
+  const hvar = varies ? readHVAR(buf, tables.get("HVAR"), fvar.axes.length) : null;
+  const hvarScaled = hvar ? scaled(hvar.store) : null;
+  const mvar = varies ? readMVAR(buf, tables.get("MVAR"), fvar.axes.length) : null;
+  const mvarScaled = mvar ? scaled(mvar.store) : null;
+  const gdef = varies ? scaled(readGdefStore(buf, tables.get("GDEF"), fvar.axes.length)) : null;
+  // A GPOS value's device table, when it is a variation index into GDEF's store.
+  const dev = gdef ? (at) => (at + 6 <= buf.length && buf.readUInt16BE(at + 4) === 0x8000 ? Math.round(storeDelta(gdef.store, gdef.scalars, buf.readUInt16BE(at), buf.readUInt16BE(at + 2))) : 0) : null;
+  const metric = (tagName, value) => {
+    const rec = mvarScaled ? mvar.records.get(tagName) : null;
+    return rec ? value + Math.round(storeDelta(mvarScaled.store, mvarScaled.scalars, rec[0], rec[1])) : value;
+  };
+
   const kern = readKern(buf, tables.get("kern"));
   // GPOS when the font kerns there, as any shaping engine would, else the old kern table.
   let gpos = null;
   try {
-    gpos = readGposKern(buf, tables.get("GPOS"));
+    gpos = readGposKern(buf, tables.get("GPOS"), dev);
   } catch {
     gpos = null;
   }
@@ -547,11 +681,40 @@ export function loadFont(buffer) {
     if (!kernCache.has(k)) kernCache.set(k, gpos ? gpos(a, b) : (kern.get(k) ?? 0));
     return kernCache.get(k);
   };
-  const ascender = buf.readInt16BE(tables.get("hhea").offset + 4);
-  const descender = buf.readInt16BE(tables.get("hhea").offset + 6);
-  const lineGap = buf.readInt16BE(tables.get("hhea").offset + 8);
-  const outlines = flavour === "TrueType" ? (gid) => readGlyph(buf, tables.get("glyf"), tables.get("loca"), long, gid, numGlyphs) : null;
-  const cff = flavour === "TrueType" ? null : readCFF(buf, tables.get(flavour === "CFF" ? "CFF " : "CFF2"), { cff2: flavour === "CFF2", numGlyphs });
+  const ascender = metric("hasc", buf.readInt16BE(tables.get("hhea").offset + 4));
+  const descender = metric("hdsc", buf.readInt16BE(tables.get("hhea").offset + 6));
+  const lineGap = metric("hlgp", buf.readInt16BE(tables.get("hhea").offset + 8));
+  // TrueType outlines move by gvar; each glyph is then read once at these coordinates and kept,
+  // with the advance change its phantom points carry, for a font without HVAR.
+  const gvar = varies && flavour === "TrueType" ? readGvar(buf, tables.get("gvar"), fvar.axes.length) : null;
+  // A glyph's deltas depend only on the glyph, so each is worked out once however many composites
+  // place it.
+  const varyCache = new Map();
+  const vary = gvar
+    ? (gid, pointCount, ends, xs, ys) => {
+        if (!varyCache.has(gid)) varyCache.set(gid, gvar.deltas(gid, pointCount, norm, ends, xs, ys));
+        return varyCache.get(gid);
+      }
+    : null;
+  const glyphCache = new Map();
+  const readVaried = (gid) => {
+    if (!glyphCache.has(gid)) {
+      const met = { advance: 0, from: null };
+      glyphCache.set(gid, { contours: readGlyph(buf, tables.get("glyf"), tables.get("loca"), long, gid, numGlyphs, 0, vary, met), advance: met.advance, from: met.from });
+    }
+    return glyphCache.get(gid);
+  };
+  const outlines = flavour !== "TrueType" ? null : vary ? (gid) => readVaried(gid).contours : (gid) => readGlyph(buf, tables.get("glyf"), tables.get("loca"), long, gid, numGlyphs);
+  const cff = flavour === "TrueType" ? null : readCFF(buf, tables.get(flavour === "CFF" ? "CFF " : "CFF2"), { cff2: flavour === "CFF2", numGlyphs, norm: varies ? norm : null });
+  const advanceOf = (gid) => {
+    const base = advances[gid] ?? 0;
+    if (!varies) return base;
+    if (hvarScaled) return base + Math.round(storeDelta(hvarScaled.store, hvarScaled.scalars, ...hvar.map(gid)));
+    if (!vary) return base;
+    // From the phantom points: the glyph's own, or a USE_MY_METRICS component's.
+    const v = readVaried(gid);
+    return (v.from != null ? (advances[v.from] ?? base) : base) + Math.round(v.advance);
+  };
   const commandCache = new Map();
   const commandsOf = (gid) => {
     if (!commandCache.has(gid)) commandCache.set(gid, gid >= 0 && gid < numGlyphs ? cff.commands(gid, unitsPerEm) : []);
@@ -627,11 +790,19 @@ export function loadFont(buffer) {
     descender,
     lineGap,
     capHeight,
-    family: readFamily(buf, tables.get("name")),
+    family: readFamily(names),
     kerning: gpos ? "GPOS" : kern.size ? "kern" : null,
+    // The axes a variable font has and its named instances; where it is set (the coordinates as
+    // applied, clamped to the axes), the instance those match if any, and whether anything is
+    // away from its default.
+    axes: fvar ? fvar.axes.map((a) => ({ tag: a.tag.trim(), name: a.name, min: a.min, default: a.def, max: a.max, hidden: a.hidden })) : [],
+    instances: fvar ? fvar.instances.map((inst) => ({ name: inst.name, coords: trimTags(inst.coords) })) : [],
+    variation: applied ? trimTags(applied) : null,
+    instance: instanceName,
+    varies,
     // A symbol font maps its characters at U+F020 to U+F0FF; the byte code a user types reaches them.
     glyphFor: (codepoint) => cmap.get(codepoint) ?? (cmap.symbol && codepoint < 0x100 ? cmap.get(codepoint + 0xf000) : undefined) ?? 0,
-    advanceOf: (gid) => advances[gid] ?? 0,
+    advanceOf,
     kernBetween,
     outlines: flavour,
     glyphPath,
@@ -641,6 +812,24 @@ export function loadFont(buffer) {
     has: (codepoint) => cmap.has(codepoint) || (cmap.symbol && codepoint < 0x100 && cmap.has(codepoint + 0xf000)),
     symbol: Boolean(cmap.symbol),
   };
+}
+
+/** How a variable font is set, for a report: "Bold (wght 700, wdth 100)", or null when it is at its default. */
+export function describeVariation(font) {
+  if (!font.varies || !font.variation) return null;
+  const coords = font.axes.map((a) => `${a.tag} ${font.variation[a.tag]}`).join(", ");
+  return font.instance ? `${font.instance} (${coords})` : coords;
+}
+
+/** The same, fit for a file name: "bold" or "wght650-wdth90". */
+export function variationSlug(font) {
+  if (!font.varies || !font.variation) return null;
+  const named = font.instance ? font.instance.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") : "";
+  if (named) return named;
+  return font.axes
+    .filter((a) => font.variation[a.tag] !== a.default)
+    .map((a) => `${a.tag}${String(font.variation[a.tag]).replace(/[^0-9a-z.-]/gi, "")}`)
+    .join("-");
 }
 
 /**

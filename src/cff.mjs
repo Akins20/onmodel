@@ -4,14 +4,16 @@
  *
  * Read here: the CFF table (version 1) for name-keyed fonts and for CID-keyed ones, whose glyphs
  * each belong to one of several font dicts with subroutines of their own; and CFF2, the table of
- * variable OpenType fonts, at its default instance, since onmodel sets a font, it does not explore
- * its design space. The charstring interpreter runs every drawing operator, both kinds of
+ * variable OpenType fonts, at its default instance or at the coordinates given, where each
+ * blend's deltas are weighted by their regions. The charstring interpreter runs every drawing operator, both kinds of
  * subroutine, hint and counter masks (skipped, they only steer rasterisers at small sizes), the old
  * `seac` way of building an accented letter from two others, and the arithmetic operators.
  *
  * Widths in a charstring are skipped: hmtx is what every engine uses for advances, and it is
  * already read. Outlines come back in font units as move, line, cubic and close commands.
  */
+
+import { readStore, storeScalars } from "./variation.mjs";
 
 /** A CFF INDEX: count, offset size, offsets, data. Returns the items and where the index ends. */
 function readIndex(buf, at, cff2 = false) {
@@ -164,7 +166,7 @@ const STANDARD = (() => {
  * Opens a CFF or CFF2 table. Returns how many glyphs it has and a function that draws one glyph
  * as commands in font units: ["M", x, y], ["L", x, y], ["C", x1, y1, x2, y2, x, y], ["Z"].
  */
-export function readCFF(buf, table, { cff2 = false, numGlyphs = null } = {}) {
+export function readCFF(buf, table, { cff2 = false, numGlyphs = null, norm = null } = {}) {
   const base = table.offset;
   let topDict;
   let globalSubrs;
@@ -200,15 +202,13 @@ export function readCFF(buf, table, { cff2 = false, numGlyphs = null } = {}) {
   };
   // Type 2 allows 48 arguments on the stack; CFF2 says how many it needs, up to 513.
   const stackLimit = cff2 ? Math.min(topDict.get(25)?.[0] ?? 513, 513) : 48;
-  // A CFF2 blend carries one delta per region, and how many regions depends on which item
-  // variation data the glyph uses, so the counts are read from the variation store.
-  const regionCounts = [];
+  // A CFF2 blend carries one delta per region of the item variation data the glyph uses. At the
+  // default instance the deltas are dropped; elsewhere each is weighted by its region's scalar.
   const vstoreAt = cff2 ? topDict.get(24)?.[0] : null;
-  if (vstoreAt != null) {
-    const ivs = base + vstoreAt + 2;
-    const count = buf.readUInt16BE(ivs + 6);
-    for (let k = 0; k < count; k++) regionCounts.push(buf.readUInt16BE(ivs + buf.readUInt32BE(ivs + 8 + 4 * k) + 4));
-  }
+  const tableLimit = Math.min(buf.length, base + (table.length || buf.length - base));
+  const store = vstoreAt != null ? readStore(buf, base + vstoreAt + 2, tableLimit, norm ? norm.length : null) : null;
+  const regionCount = (vs) => store?.data(vs)?.regionIndexes.length ?? 0;
+  const scalars = store && norm ? storeScalars(store, norm) : null;
   let fdOf = () => 0;
   let privates;
   const fdArrayAt = topDict.get(1236)?.[0];
@@ -259,6 +259,7 @@ export function readCFF(buf, table, { cff2 = false, numGlyphs = null } = {}) {
     let open = false;
     let widthDone = cff2;
     let vsindex = priv.vsindex;
+    if (!Number.isInteger(vsindex) || vsindex < 0) throw new Error(`this font's private dict sets a vsindex of ${vsindex}, which names no variation data, so the font is malformed`);
     const transient = [];
     // An operator short of arguments reads past the stack and makes NaN of every point after it.
     const point = (nx, ny) => {
@@ -509,15 +510,24 @@ export function readCFF(buf, table, { cff2 = false, numGlyphs = null } = {}) {
             return;
           case 15: // vsindex (CFF2): which set of regions the blends that follow use
             vsindex = stack.pop() ?? 0;
+            if (!Number.isInteger(vsindex) || vsindex < 0) throw new Error(`this font's glyph ${gid} sets a vsindex of ${vsindex}, which names no variation data, so the font is malformed`);
             stack = [];
             break;
           case 16: {
             // blend (CFF2): n default values, then a delta per value per region. The default
             // instance keeps the values and drops the deltas.
             const n = stack.pop() ?? 0;
-            const regions = regionCounts[vsindex] ?? 0;
+            const regions = regionCount(vsindex);
             const start = stack.length - n * (regions + 1);
             if (start < 0) throw new Error("a CFF2 blend asks for more values than the stack holds");
+            if (scalars) {
+              const s = scalars(vsindex);
+              for (let v = 0; v < n; v++) {
+                let value = stack[start + v];
+                for (let r = 0; r < regions; r++) value += stack[start + n + v * regions + r] * (s[r] ?? 0);
+                stack[start + v] = value;
+              }
+            }
             stack = stack.slice(0, start + n);
             break;
           }

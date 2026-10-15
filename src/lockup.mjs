@@ -3,7 +3,7 @@ import path from "node:path";
 import { encodePNG } from "./png.mjs";
 import { slug } from "./generate.mjs";
 import { loadMark } from "./icons.mjs";
-import { loadFont, textPath } from "./font.mjs";
+import { loadFont, textPath, describeVariation } from "./font.mjs";
 import { vectorize, paletteNames, transformPath, pathToPolygons, renderLayers, svgText, androidText, androidColoursText } from "./vector.mjs";
 import { parseColor } from "./color.mjs";
 
@@ -82,6 +82,8 @@ export async function makeLockup({
   gap = 0.5,
   symbol = 1.2,
   kerning = true,
+  variation = null,
+  instance = null,
   detail = null,
   stroke = null,
   tone = null,
@@ -117,7 +119,7 @@ export async function makeLockup({
   });
   if (v.refused) throw new Error(`the symbol will not trace, so there is no lockup to make: ${v.refused}`);
 
-  const font = loadFont(await readFile(fontPath));
+  const font = loadFont(await readFile(fontPath), { variation, instance });
   const scale = px / font.unitsPerEm;
   const capPx = font.capHeight * scale;
   // Set with the baseline at zero, so the cap band runs from -capPx up to it.
@@ -179,7 +181,7 @@ export async function makeLockup({
     mode: `lockup, ${layout}`,
     layout,
     symbol: { from: path.basename(file), width: Math.round(symW), height: Math.round(symH), scale: Math.round(s * 1000) / 1000, verdict: v.facts.verdict, colours: v.facts.colours },
-    word: { text: String(text), font: path.basename(fontPath), px, tracking, capHeight: Math.round(capPx), missing: set.missing, blank: set.blank },
+    word: { text: String(text), font: path.basename(fontPath), setting: describeVariation(font), variation: font.variation, instance: font.instance, px, tracking, capHeight: Math.round(capPx), missing: set.missing, blank: set.blank },
     gap: Math.round(gapPx),
     width: w,
     height: h,

@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { encodePNG } from "./png.mjs";
 import { slug } from "./generate.mjs";
-import { loadFont, textPath } from "./font.mjs";
+import { loadFont, textPath, describeVariation } from "./font.mjs";
 import { paletteNames, pathToPolygons, coverage, svgText, androidText, androidColoursText } from "./vector.mjs";
 import { labOf, deltaE76 } from "./key.mjs";
 import { parseColor, toHex } from "./color.mjs";
@@ -50,7 +50,7 @@ function brandFill(colour, palette, names) {
   return { hex: best.hex, rgb: best.rgb, name: names.get(best.hex) ?? `colour-${palette.indexOf(best.hex) + 1}`, brand: true };
 }
 
-export async function makeText({ config, text, fontPath, name = null, size = 128, tracking = 0, colour = null, kerning = true, log = (s) => process.stderr.write(s) }) {
+export async function makeText({ config, text, fontPath, name = null, size = 128, tracking = 0, colour = null, kerning = true, variation = null, instance = null, log = (s) => process.stderr.write(s) }) {
   if (!text || !String(text).trim()) throw new Error("text needs --string \"<the words>\"");
   if (!fontPath) throw new Error('text needs --font <file.ttf or .otf>: the letters are set from a real font, not drawn');
   const label = slug(name ?? String(text));
@@ -59,7 +59,7 @@ export async function makeText({ config, text, fontPath, name = null, size = 128
   const opts = config.vector ?? {};
   const tokenPrefix = opts.tokenPrefix ?? "brand";
 
-  const font = loadFont(await readFile(fontPath));
+  const font = loadFont(await readFile(fontPath), { variation, instance });
   // Place it where it will sit, rather than moving the path text afterwards: shifting a
   // path by rewriting its numbers means parsing them back out, and it threw away the
   // rounding on the way through.
@@ -103,6 +103,9 @@ export async function makeText({ config, text, fontPath, name = null, size = 128
   const facts = {
     mode: "set from a font",
     font: path.basename(fontPath),
+    setting: describeVariation(font),
+    variation: font.variation,
+    instance: font.instance,
     unitsPerEm: font.unitsPerEm,
     text: String(text),
     glyphs: set.glyphs,

@@ -2,13 +2,57 @@
 
 ## Unreleased
 
+- Variable fonts are set at any point on their axes: `--variation "wght=650,wdth=90"` or
+  `--instance "SemiBold Condensed"` on `text`, `lockup` and `bitmapfont`, with the setting named
+  in the report and an unknown axis or instance refused with the ones the font has. Coordinates
+  are clamped to their axes, normalised and bent through avar; then the outlines move by gvar
+  (points a tuple leaves out inferred from their neighbours as the spec and FreeType do,
+  composites moving their offsets, intermediate tuples applying in full at their own peak) or
+  by CFF2 blends weighted by region, advances by HVAR (else the phantom points), line metrics by
+  MVAR, and kerning by the GPOS device tables that point into GDEF's variation store. Checked
+  against FreeType and HarfBuzz through Godot 4.7.2 on five variable fonts: 13,101 outlines
+  across nine settings with every bound the same and every advance but one (a glyph reached only
+  through GSUB that FreeType reports as 0 wide even at the default); every ordered pair of a
+  73-character set, 53,290 pairs across ten settings (6,024 of them kerned, two of the settings
+  the fonts' defaults), all placed where HarfBuzz places them, 60 and 61 of them at Segoe UI
+  Variable's two settings moved from their default kerning; with HVAR hidden, all 8,162 advances
+  read from gvar's phantom points the same as FreeType's; and a byte-built CFF2 font identical to
+  FreeType point for point at four weights. Two bugs fell out of that check and no test had
+  seen them: GDEF's variation store was read from the wrong offset, which left every variable
+  kern at its default while short sample strings still matched, and an intermediate gvar tuple
+  was weighted zero at its own peak when its range ended there. The FreeType outlines were taken
+  at a size equal to each font's em, from copies with the TrueType instructions stripped, so
+  neither scaling nor the hinter moved a point.
+- A spec review of the variable-font code, each finding verified by three more readers, added
+  what the cross-check could not reach because no local font exercises it: an empty glyph such
+  as the space takes its advance from its phantom points when a font has no HVAR (it kept its
+  default width); a USE_MY_METRICS component lends a composite its advance, as FreeType and
+  HarfBuzz both read it; coordinates are normalised in 16.16 through avar and rounded once, as
+  the spec requires (one F2DOT14 step off before, at ordinary weights); an axis whose region is
+  not a proper tent is ignored; an avar map without its -1, 0 and 1 points leaves the axis
+  unbent; a point a tuple names twice takes both deltas; a shared tuple the table lacks is
+  dropped; and two instances sharing coordinates keep the name asked for. A second review, of
+  those fixes, added the clamp the spec requires after avar, drops an out-of-order avar record on
+  its own rather than the whole map, treats a NULL item variation data offset as no data, and
+  names a bitmap font folder by coordinates when an instance's name has no letters a folder can
+  carry. Hostile fonts no longer stall or exhaust `loadFont`: fvar and every store record are held
+  to their tables (an overlapping fvar once hung on open), the item variation store and its region
+  list are read lazily and each data parsed once however many entries alias it (an aliased store
+  once ran out of memory), a region list must match the font's axes and stay under the spec's
+  32,768 regions, a CFF2 vsindex that names no data is refused by name rather than crashing, a
+  truncated avar no longer stops a font left at its default from opening (avar is read only when a
+  setting is asked for), a glyph's gvar work is capped at 4,194,304 point-steps and its
+  composites at 2,097,152 placed points (the second at every setting, default included: nested
+  composites a few hundred bytes long used to hang it), and with a setting each glyph's deltas are
+  worked out once however many composites place it. A bitmap font's folder keeps its setting
+  however long the font file's name.
 - CFF OpenType fonts (.otf) are read, so `text`, `lockup` and `bitmapfont` take them as well
   as TrueType; they used to be named and refused. The Type 2 charstrings are run by an
   interpreter of their own: every drawing operator, local and global subroutines with their
   bias, hint and counter masks skipped by the stem count (implied vstems included), widths
   dropped in each position a charstring may carry one, the four flex operators, seac accents,
   the arithmetic operators, name-keyed and CID-keyed fonts (FDSelect formats 0, 3 and 4) and
-  CFF2 at its default instance (vsindex and blend keep the values and drop the deltas). Checked
+  CFF2 (vsindex and blend). Checked
   against FreeType through Godot 4.7.2's TextServer on eight Adobe fonts, 8,770 glyphs: every
   bound and glyph id matched, and the only outline differences were FreeType's own half-pixel
   hinting shifts on hintless symbols. Charstring units are the head table's, as FreeType reads
