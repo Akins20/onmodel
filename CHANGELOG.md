@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 (2026-10-15)
 
 - Variable fonts are set at any point on their axes: `--variation "wght=650,wdth=90"` or
   `--instance "SemiBold Condensed"` on `text`, `lockup` and `bitmapfont`, with the setting named
