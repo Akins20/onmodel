@@ -10,6 +10,10 @@ import { MODES, variants, layout, adjacencyReport, coverage } from "./terrain.mj
 import { verifyTrim } from "./trim.mjs";
 import { bandSmear, findBand, readAndroidNinePatch } from "./ninepatch.mjs";
 import { parseFnt } from "./bmfont.mjs";
+import { loadMotion } from "./motion.mjs";
+import { readAVD, readLottie, readSVG } from "./motionread.mjs";
+import { compareScenes, faithful, checkTimes } from "./motionset.mjs";
+import { apngInfo } from "./anim.mjs";
 
 /**
  * A no-API gate: re-read what a run already wrote and hold it to the same rules,
@@ -48,6 +52,7 @@ const LAYOUT = [
   ["normal.json", "normal"],
   ["terrain.json", "terrain"],
   ["shape.json", "shape"],
+  ["motion.json", "motion"],
 ];
 
 async function exists(file) {
@@ -786,7 +791,147 @@ export async function checkRun({ dir }) {
     results.push({ kind: "normal", name: data.name, dir: base, files: [{ rel, ...got }] });
   }
 
+  const motion = await load("motion.json", "motion");
+  if (motion?.data?.files) {
+    const { base, data } = motion;
+    const at = (f) => candidatesFor(base, { rel: String(f).split(SEP).pop(), recorded: f, summaryDir: data.dir });
+    results.push({ kind: "motion", name: data.name, dir: base, files: await recheckMotion(data, at, base) });
+  }
+
   return results;
+}
+
+/**
+ * Re-reads a motion run. The spec is the source of truth, so when it can still be found (at its
+ * recorded path, or by name beside the summary) every vector file is read back the way its player
+ * reads it and drawn against the timeline again, which catches a drawable, Lottie or SVG edited by
+ * hand since. Without the spec the files are held to their recorded digests, which catches the
+ * same edits without saying which frame they changed. The rasters are held to their digests and
+ * frame counts: a GIF re-saved by another tool is a different file, and that is what is caught.
+ */
+export async function recheckMotion(data, at, base) {
+  const f = data.facts ?? {};
+  const files = [];
+  const first = async (tries) => {
+    for (const t of tries) {
+      try {
+        return { file: t, buffer: await readFile(t) };
+      } catch {
+        // try the next place
+      }
+    }
+    return null;
+  };
+  const specTries = [...(data.spec ? [data.spec] : []), ...(data.spec ? candidatesFor(base, { rel: String(data.spec).split(SEP).pop() }) : [])];
+  let scene = null;
+  let specNote = "motion.json records no spec";
+  for (const t of specTries) {
+    try {
+      scene = await loadMotion(t);
+      specNote = `the spec at ${t}`;
+      break;
+    } catch (err) {
+      specNote = `the spec could not be loaded (${err.message.split("\n")[0]})`;
+    }
+  }
+  const digestOf = (buffer) => createHash("sha256").update(buffer).digest("hex").slice(0, 16);
+  const vectors = [
+    ["android", readAVD, "android drawable"],
+    ["lottie", readLottie, "Lottie"],
+    ["svg", readSVG, "SVG"],
+  ];
+  for (const [key, reader, what] of vectors) {
+    if (!data.files[key]) continue;
+    const rel = String(data.files[key]).split(SEP).pop();
+    const got = await first(at(data.files[key]));
+    if (!got) {
+      files.push({ rel, file: at(data.files[key])[0], error: "missing", checks: [{ check: "present", ok: false, detail: "not on disk under the run folder" }] });
+      continue;
+    }
+    const checks = [];
+    const recorded = f[`${key}Digest`] ?? null;
+    const now = digestOf(got.buffer);
+    if (recorded) checks.push({ check: "unchanged", ok: now === recorded, warn: now !== recorded && Boolean(scene), detail: now === recorded ? "the bytes the run wrote" : `edited since the run wrote it (digest ${now}, was ${recorded})` });
+    let other = null;
+    try {
+      other = reader(got.buffer.toString("utf8"));
+      checks.push({ check: "reads", ok: true, detail: `still reads as ${what}` });
+    } catch (err) {
+      checks.push({ check: "reads", ok: false, detail: `no longer reads as ${what}: ${err.message}` });
+    }
+    if (other && scene) {
+      const d = compareScenes(scene, other, { scale: Math.min(1, 256 / Math.max(scene.width, scene.height)), times: checkTimes(scene) });
+      checks.push({ check: "timeline", ok: faithful(d), detail: d.max === 0 ? "drawn back, it matches the timeline exactly" : `drawn back, it differs from the timeline by up to ${d.max} levels over ${(d.share * 100).toFixed(2)}% of the frame at ${d.worstAt} ms` });
+    } else if (other) checks.push({ check: "timeline", ok: true, warn: true, detail: `not drawn against the timeline: ${specNote}` });
+    files.push({ rel, file: got.file, bytes: got.buffer.length, checks });
+  }
+  for (const key of ["gif", "apng", "mp4"]) {
+    if (!data.files[key]) continue;
+    const rel = String(data.files[key]).split(SEP).pop();
+    const got = await first(at(data.files[key]));
+    if (!got) {
+      files.push({ rel, file: at(data.files[key])[0], error: "missing", checks: [{ check: "present", ok: false, detail: "not on disk under the run folder" }] });
+      continue;
+    }
+    const checks = [];
+    const recorded = f[key]?.digest ?? null;
+    const now = digestOf(got.buffer);
+    checks.push({ check: "unchanged", ok: !recorded || now === recorded, detail: !recorded ? "the run recorded no digest" : now === recorded ? "the bytes the run wrote" : `edited or re-saved since the run wrote it (digest ${now}, was ${recorded})` });
+    const want = f[key]?.frames ?? null;
+    if (key === "apng") {
+      let frames = null;
+      try {
+        frames = apngInfo(got.buffer).frames || null;
+      } catch {
+        // not a PNG at all
+      }
+      checks.push({ check: "frames", ok: frames != null && (want == null || frames === want), detail: frames == null ? "not an APNG" : `${frames} frames; the run wrote ${want ?? "an unrecorded number"}` });
+    }
+    if (key === "gif") {
+      const frames = gifFrameCount(got.buffer);
+      checks.push({ check: "frames", ok: frames != null && (want == null || frames === want), detail: frames == null ? "not a GIF" : `${frames} frames; the run wrote ${want ?? "an unrecorded number"}` });
+    }
+    files.push({ rel, file: got.file, bytes: got.buffer.length, checks });
+  }
+  if (data.files.poster) {
+    const rel = String(data.files.poster).split(SEP).pop();
+    const w = f.width && f.pixels ? Math.max(1, Math.round((f.width * f.pixels) / Math.max(f.width, f.height))) : null;
+    const h = f.height && f.pixels ? Math.max(1, Math.round((f.height * f.pixels) / Math.max(f.width, f.height))) : null;
+    files.push({ rel, ...(await recheckFile(at(data.files.poster), w && h ? { width: w, height: h } : null)) });
+  }
+  return files;
+}
+
+/** How many image frames a GIF holds, by walking its blocks; null when it is not a GIF. */
+export function gifFrameCount(buffer) {
+  if (buffer.length < 13 || buffer.toString("latin1", 0, 3) !== "GIF") return null;
+  let at = 13;
+  const flags = buffer[10];
+  if (flags & 0x80) at += 3 * (1 << ((flags & 7) + 1));
+  const skipSubBlocks = () => {
+    while (at < buffer.length) {
+      const size = buffer[at++];
+      if (size === 0) return;
+      at += size;
+    }
+  };
+  let frames = 0;
+  while (at < buffer.length) {
+    const b = buffer[at++];
+    if (b === 0x3b) break;
+    if (b === 0x21) {
+      at++;
+      skipSubBlocks();
+    } else if (b === 0x2c) {
+      const local = buffer[at + 8];
+      at += 9;
+      if (local & 0x80) at += 3 * (1 << ((local & 7) + 1));
+      at++;
+      skipSubBlocks();
+      frames++;
+    } else return null;
+  }
+  return frames;
 }
 
 /**

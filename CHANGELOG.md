@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+- `motion`: shapes onmodel already made, moved from code. A JSON spec names its sources (the
+  SVG `vector` traced, split into its subpaths, or text set letter by letter from a real font,
+  variable fonts included), arranges them in layers that scale, rotate, translate and fade
+  about a pivot the way Android's VectorDrawable groups do, and keyframes them with CSS's
+  Bezier easings or Android's own interpolators, computed exactly as the framework computes
+  them. One timeline is written as an Android animated vector drawable (the splash icon on
+  Android 12 and later; a group cannot fade, so a layer's opacity becomes its paths' fillAlpha,
+  two nested fades are refused with the reason, and a splash over 1000 ms is refused), Lottie
+  JSON (Bezier easings as keyframe tangents, Android's sampled on the frame grid, the out point
+  one frame past the end), an SVG animated with CSS keyframes (plays once and holds the end, or
+  loops; under prefers-reduced-motion it shows the finished art), a looping GIF and APNG at
+  50 fps, an H.264 MP4 through ffmpeg when it is installed, and a poster. Every vector file is
+  read back the way its own player reads it and drawn against the timeline, the end is held to
+  the artwork at rest (every property back where it started, the last frame identical to the
+  artwork drawn still; a full turn counts as rest), the video is probed for its frame count,
+  and `onmodel check` does it all again from disk, holding the files to their digests when the
+  spec is not beside them. Checked beyond its own readers on Rooster's splash (22 paths in 8
+  layers, 16 animations, 900 ms): the drawable compiles under aapt2 36, lottie-web 5.12.2 draws
+  all 55 frames within anti-aliasing of the frames drawn here (no pixel more than 128 levels
+  off, under 1% of pixels more than 8 off, on every frame), and Chromium's CSS engine
+  computes every moving group's transform within 0.012 of the timeline's at every frame. Three
+  bugs fell out of those checks: Android easings were sampled at even intervals rather than on
+  the frame grid (0.14 off at frame times), the Lottie out point sat on the last frame so
+  lottie-web drew nothing on the frame that should hold the finished mark, and the frame
+  comparison read colour un-premultiplied, so a nearly transparent pixel produced 253-level
+  false differences.
+
 ## 0.7.0 (2026-10-15)
 
 - Variable fonts are set at any point on their axes: `--variation "wght=650,wdth=90"` or

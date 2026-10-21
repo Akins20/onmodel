@@ -366,3 +366,55 @@ ${atlas}
 ${actions}`;
   return page(`${summary.name}: sprites`, SPRITES_CSS, body);
 }
+
+const MOTION_CSS = `section.block{max-width:1100px;margin:0 auto 18px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.players{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+.players figure{display:flex;flex-direction:column;gap:6px}.stage{aspect-ratio:var(--ar);border-radius:10px;border:1px solid var(--line);display:grid;place-items:center;overflow:hidden}
+.stage img,.stage video,.stage .lottie{width:100%;height:100%;object-fit:contain;display:block}
+.players button{align-self:flex-start;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:999px;padding:3px 12px;cursor:pointer;font-size:12px}
+.meta{color:var(--mut);font-size:13px}code{font-size:12px}`;
+
+/**
+ * A motion run, played every way it was written: the animated SVG, the GIF, the APNG, the video
+ * and the Lottie (through lottie-web, its data embedded so the page works opened from disk), each
+ * with a replay button, over the scene's own background.
+ */
+export function renderMotionHTML(summary, dir, lottieData = null) {
+  const f = summary.facts ?? {};
+  const files = summary.files ?? {};
+  const src = (file) => esc(relativeSrc(dir, file));
+  const ar = `${f.width} / ${f.height}`;
+  const ground = f.background ?? "transparent";
+  const stage = (inner) => `<div class="stage${f.background ? "" : " checker"}" style="--ar:${ar};background-color:${esc(ground)}">${inner}</div>`;
+  const players = [];
+  if (files.svg) players.push(`<figure>${stage(`<img data-replay src="${src(files.svg)}" alt="">`)}<figcaption>Animated SVG (web pages)</figcaption><button type="button" data-for="img">Replay</button></figure>`);
+  if (files.lottie && lottieData) players.push(`<figure>${stage('<div class="lottie" id="lottie"></div>')}<figcaption>Lottie, through lottie-web (apps)</figcaption><button type="button" data-for="lottie">Replay</button></figure>`);
+  if (files.gif) players.push(`<figure>${stage(`<img src="${src(files.gif)}" alt="">`)}<figcaption>GIF, looping</figcaption></figure>`);
+  if (files.apng) players.push(`<figure>${stage(`<img src="${src(files.apng)}" alt="">`)}<figcaption>APNG, looping</figcaption></figure>`);
+  if (files.mp4) players.push(`<figure>${stage(`<video src="${src(files.mp4)}" muted playsinline autoplay loop></video>`)}<figcaption>MP4 video</figcaption></figure>`);
+  const rb = f.readback ?? {};
+  const back = (k) => (rb[k] ? `${rb[k].max === 0 ? "identical" : `within ${rb[k].max} levels`} when read back the way its player reads it` : "not written");
+  const rows = [
+    ["Length", `${Math.round(f.duration)} ms at ${f.fps} frames a second`],
+    ["Canvas", `${f.width} x ${f.height}, drawn at ${f.pixels} px`],
+    ["Scene", `${f.paths} paths in ${f.layers} layers, ${f.animations} animations`],
+    ["Ends on the artwork", f.settles?.skipped ? "not asked for" : f.settles?.ok ? "yes, the last frame is the artwork at rest" : `no: ${(f.settles?.off ?? []).join("; ")}`],
+    ["Android", files.android ? `${path.basename(files.android)}, ${back("android")}${f.android?.splash ? "; a splash icon, within Android's 1000 ms" : ""}` : f.android?.problems?.length ? `not written: ${f.android.problems.join("; ")}` : "not asked for"],
+    ["Lottie", files.lottie ? `${path.basename(files.lottie)}, ${Math.max(1, Math.round(f.lottieBytes / 1024))} KB, ${back("lottie")}` : "not asked for"],
+    ["SVG", files.svg ? `${path.basename(files.svg)}, ${Math.max(1, Math.round(f.svgBytes / 1024))} KB, ${back("svg")}` : "not asked for"],
+    ["GIF", f.gif ? `${f.gif.frames} frames, ${Math.max(1, Math.round(f.gif.bytes / 1024))} KB` : "not asked for"],
+    ["Video", f.mp4?.skipped ? f.mp4.skipped : f.mp4 ? `${f.mp4.frames} frames, ${f.mp4.width} x ${f.mp4.height}, ${Math.max(1, Math.round(f.mp4.bytes / 1024))} KB` : "not asked for"],
+  ];
+  const verdict = f.verdict === "good" ? "<b>Good.</b> Every format says what the timeline says." : `<b>Problems.</b> ${(f.failures ?? []).map(esc).join(" ")}`;
+  const lottieScript = files.lottie && lottieData
+    ? `<script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"></script>
+<script>var anim=lottie.loadAnimation({container:document.getElementById("lottie"),renderer:"svg",loop:false,autoplay:true,animationData:${JSON.stringify(lottieData).replace(/</g, "\\u003c")}});</script>`
+    : "";
+  const replay = `<script>document.querySelectorAll("button[data-for]").forEach(function(b){b.addEventListener("click",function(){var fig=b.closest("figure");if(b.dataset.for==="lottie"&&window.anim){anim.goToAndPlay(0,true);return}var img=fig.querySelector("img[data-replay]");if(img){var s=img.src.split("#")[0];img.src="";img.src=s+"#"+Date.now()}})})</script>`;
+  const body = `<header><h1>${esc(summary.name)} motion</h1><button class="theme" type="button">Dark</button><p class="lead">From ${esc(path.basename(summary.spec ?? ""))} · ${esc(summary.generatedAt)}</p></header>
+<div class="verdict${f.verdict === "good" ? "" : " warn"}">${verdict}</div>
+<section class="block"><div class="players">${players.join("")}</div></section>
+<section class="block"><h2>Facts</h2><table>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("")}</table></section>
+${lottieScript}${replay}`;
+  return page(`${summary.name}: motion`, MOTION_CSS, body);
+}

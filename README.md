@@ -720,6 +720,102 @@ to a JSON file of them:
 }
 ```
 
+## Motion, from code
+
+Shapes onmodel already made can move: the SVG that `vector` traced, split into its
+pieces, or a line of text set from a real font, arranged in layers and keyframed. One
+spec is written to every place a short animation has to play (a splash screen, an
+onboarding loop, a short clip for a store page or a README), and every file is checked
+on the run that wrote it. No model is called, so a run is free.
+
+```bash
+onmodel motion --spec design/motion/crow.motion.json
+```
+
+A spec is JSON: the canvas, the duration and frame rate, the sources, a tree of
+layers, and a list of animations. A source is an SVG (`"split": true` gives every
+subpath its own id, `<path id>s<k>`, so the pieces can move apart) or text (`"text"`,
+`"font"`, `"size"`, `"at": [x, baseline]`, `"fill"`; `"variation"` or `"instance"` for
+a variable font), set one path per character with the font's own advances and kerning.
+
+```json
+{
+  "name": "rooster-crow",
+  "canvas": { "width": 432, "height": 432 },
+  "duration": 900, "fps": 60, "background": "#1C1848",
+  "android": { "width": "108dp", "height": "108dp", "splash": true },
+  "sources": { "mark": { "svg": "rooster-mark.svg", "split": true } },
+  "layers": [
+    { "id": "arcs", "translate": [80, 91], "children": [
+      { "id": "arc0", "pivot": [175, 128], "path": "mark:p0s4" },
+      { "id": "arc1", "pivot": [175, 128], "path": "mark:p0s3" }
+    ] },
+    { "id": "neck", "pivot": [175, 336], "children": [
+      { "id": "head", "pivot": [185, 241], "children": [
+        { "id": "body", "translate": [80, 91], "paths": "mark:*", "except": ["p0s3", "p0s4"] }
+      ] }
+    ] }
+  ],
+  "animate": [
+    { "target": "head", "scale": [0.86, 1], "at": 0, "for": 320, "ease": "overshoot" },
+    { "target": "neck", "rotate": [0, -8], "at": 300, "for": 220, "ease": "fast-out-slow-in" },
+    { "target": "neck", "rotate": [-8, 0], "at": 520, "for": 260, "ease": "fast-out-slow-in" },
+    { "target": ["arc0", "arc1"], "stagger": 90, "scale": [0.55, 1], "opacity": [0, 1], "at": 340, "for": 220, "ease": "decelerate-cubic" }
+  ]
+}
+```
+
+A layer has an `id`, a `translate`, a `pivot`, a static `scale`, `rotate` or `opacity`,
+and either `children` or the paths it draws (`"path": "mark:p0s1"`, or `"paths":
+"mark:*"` with `"except"`). An animation names a layer or a list of them (`stagger`
+starts each one that many milliseconds after the one before), a start `at`, a length
+`for`, an `ease`, and each property it moves as `[from, to]`: `scale`, `scaleX`,
+`scaleY`, `translate` (as `[[x, y], [x, y]]`), `translateX`, `translateY`, `rotate`
+(degrees, clockwise on screen) and `opacity`. Every group transforms the way Android's
+VectorDrawable groups do: scale and rotate about the pivot, then translate. Easing is a
+cubic Bezier (`linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`,
+`fast-out-slow-in`, `linear-out-slow-in`, `fast-out-linear-in`, or four numbers) or one
+of Android's own interpolators (`overshoot`, `anticipate`, `anticipate-overshoot`,
+`bounce`, `accelerate`, `decelerate`, `accelerate-cubic`, `decelerate-cubic`,
+`accelerate-decelerate`), computed here exactly as the framework computes them, so the
+drawable the phone plays and the frames drawn here agree.
+
+It writes, into `<out>/<name>/motion/`:
+
+- **An Android animated vector drawable**, `<name>.xml`, its vector and animators
+  inlined, which is what `windowSplashScreenAnimatedIcon` takes on Android 12 and
+  later. Groups carry the transforms; a group cannot fade, so a layer's opacity becomes
+  each of its paths' `fillAlpha`. With `"android": { "splash": true }` the run is held
+  to the platform's 1000 ms cut-off, and a timeline the drawable cannot say (two nested
+  layers both fading) is refused with the reason rather than written wrong.
+- **Lottie JSON**, `<name>.lottie.json`: one shape layer of nested groups with the
+  anchor at the pivot, Bezier easings carried as keyframe tangents, Android's
+  interpolators sampled on the frame grid, and an out point one frame past the end so
+  the last frame holds the finished art.
+- **An SVG animated with CSS**, `<name>.svg`: each moving group with its own
+  `@keyframes`, sampled once a frame. It plays once and holds the end (`"loop": true`
+  to repeat), and under `prefers-reduced-motion` it shows the finished artwork instead.
+- **A GIF and an APNG** at 50 frames a second, looping; **an MP4** (H.264, when ffmpeg is
+  on the PATH or named in `ONMODEL_FFMPEG`) at the spec's own rate on the background
+  colour; and a **poster** PNG of the last frame. `--hold 500` keeps the end on screen
+  that long in the rasters; `--size 1080` sets their pixel size; `--formats` picks.
+
+Then it checks what it wrote. Each vector file is read back the way its own player
+reads it (the drawable's object animators and interpolators, Lottie's keyframes and
+tangents, the SVG's CSS keyframes) and drawn again, frame by frame, against the
+timeline, so a writer that says something the spec did not is caught on the run that
+made it. The end is held to the artwork at rest: every property back where it started
+and the last frame identical to the artwork drawn still, so a splash cannot finish on a
+half-scaled head (`"endsOn": "frame"` waives it for a loop or an exit). The video is
+probed for its frame count. `onmodel check` re-reads a committed run the same way,
+drawing the files against the spec when it can still be found beside them and holding
+them to their digests when it cannot.
+
+What it does not do: the shapes themselves do not change (no morphing, no path
+animation, no trim paths), strokes are not animated, and a layer holds paths or
+children, not both. Those are the lines between a splash, an onboarding loop or a short
+clip and a full After Effects comp.
+
 ## Costs and budgets
 
 Prices are built in as of 2026-10-07. An image call bills three things and the API's
@@ -816,6 +912,7 @@ their recorded size. Any failure exits with code 2, naming the file and the rule
 | `sheet --subject "..." --name x` | the model sheet: front, side and back views, sliced and measured |
 | `sprites --name x` | each action as a strip, measured against the sheet, repaired, packed and exported; `--trim` and `--pivot` |
 | `atlas --name x [--trim] [--pivot]` | pack a sprites run again, trimmed or with a pivot, every frame put back and compared (free) |
+| `motion --spec file.json` | shapes onmodel made, moved by a keyframed timeline: an Android animated vector drawable, Lottie, an animated SVG, GIF, APNG, MP4 and a poster, each read back and drawn against the timeline (free) |
 | `ninepatch --mark panel.png` | the insets that let UI art stretch, found from the art; a Godot StyleBoxTexture, an Android .9.png and CSS (free) |
 | `bitmapfont --font f.ttf --px 16` | a bitmap font from a real font, written as a .fnt and page, set back from disk and compared; `--variation` or `--instance` for a variable font (free) |
 | `check [--name x \| --in dir]` | re-check written outputs against the rulebook, no API; no target checks every run under `--out`; exits 2 on failure |
@@ -834,7 +931,9 @@ play-feature,og,github`, `--mark logo.png`, `--count 3`, `--size 2K`, `--budget 
 stroked centre lines, `--tone N` to trace shaded art in up to N tones, `--mono` (with
 `--threshold 0-255`) for one colour by luminance, and `--noise N` to ignore shapes
 smaller than N pixels. For `edit`: `--candidate 2` or `2e1` (the pick by default),
-`--change "..."`, `--in dir`, `--sheet`, `--no-judge`. For `check`: `--name x` or `--in dir`,
+`--change "..."`, `--in dir`, `--sheet`, `--no-judge`. For `motion`: `--spec file.json`,
+`--name slug`, `--size 432`, `--formats android,lottie,svg,gif,apng,mp4,poster`,
+`--hold 500`, `--keep-frames`. For `check`: `--name x` or `--in dir`,
 else every run under `--out`. For `price`: `--subjects N`, `--sprites "name:frames;..."`,
 `--store`, `--count`, `--size`, `--no-judge`. For every command: `--config`, `--out`,
 `--brief`, `--json`.
@@ -892,8 +991,10 @@ Every knob has a default. Resolution order, lowest to highest: built-in defaults
   when the mark traces) and background colour to import into Icon Composer by hand.
 - **Vectors from painted art.** Shaded, textured or painterly art stays a PNG on
   purpose; a trace of it would be thousands of shapes and a worse file.
-- **Video.** Sequences ship as atlases, APNG and GIF; video files and video generation
-  are not in scope.
+- **Video generation.** `motion` writes an MP4 of a timeline it drew itself; painted
+  sequences ship as atlases, APNG and GIF, and asking a model for video is not in scope.
+- **Morphing.** `motion` moves, turns, scales and fades shapes that stay the shapes they
+  are; a path that becomes another path, an animated stroke or a trim path is not made.
 
 ## Using it from Claude Code
 

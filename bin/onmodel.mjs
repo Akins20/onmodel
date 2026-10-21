@@ -22,6 +22,7 @@ import { makeNinePatch } from "../src/ninepatchset.mjs";
 import { makeBitmapFont } from "../src/bitmapfontset.mjs";
 import { parseVariation } from "../src/variation.mjs";
 import { makeVector } from "../src/vectorize.mjs";
+import { makeMotion, FORMATS as MOTION_FORMATS } from "../src/motionset.mjs";
 import { checkRun, findRuns, failuresOf } from "../src/check.mjs";
 
 const HELP = `onmodel: images, sprites and sets kept on model
@@ -81,6 +82,12 @@ Commands
   store --name x [--subject "..."]  an on-brand hero painted, judged, then cropped to each store's exact
         [--targets play-feature,og,github] [--mark logo.png]    canvas as a 24-bit PNG (no alpha)
         [--count 3] [--size 2K] [--budget 2] [--no-judge]
+  motion --spec crow.motion.json    shapes onmodel made (a traced SVG, text set from a font), moved by a
+         [--name slug] [--size 432]  keyframed timeline, written as an Android animated vector drawable
+         [--formats android,lottie,svg,gif,apng,mp4,poster]   (splash screens), Lottie JSON, an SVG
+         [--hold 500] [--keep-frames] animated with CSS, a GIF, an APNG, an MP4 (ffmpeg) and a poster;
+                                    every vector file is read back the way its player reads it and drawn
+                                    against the timeline, and the end is held to the artwork at rest (free)
   sheet --subject "..." --name x    the model sheet: front, side and back views every frame is held to
            [--count 3] [--no-judge]
   sprites --name x                  paint each action as a strip, measure it against the sheet, repair
@@ -183,6 +190,10 @@ const OPTIONS = {
   terrain: { type: "string" },
   noise: { type: "string" },
   change: { type: "string" },
+  spec: { type: "string" },
+  formats: { type: "string" },
+  hold: { type: "string" },
+  "keep-frames": { type: "boolean" },
   in: { type: "string" },
   json: { type: "boolean" },
   filter: { type: "string" },
@@ -560,6 +571,36 @@ async function main() {
         result.files.image ? `edit it again with --candidate ${result.id}` : null,
       ].filter(Boolean);
       emit(config, lines.join("\n"), { command: "edit", ...result });
+      return;
+    }
+    case "motion": {
+      // --size is the raster size here, in pixels, not a Gemini size such as 1K.
+      const config = await loadConfig({ ...flags, size: undefined });
+      const num = (v, what, lo, hi) => {
+        if (v == null) return null;
+        const n = Number(v);
+        if (!Number.isInteger(n) || n < lo || n > hi) throw new Error(`--${what} must be a whole number between ${lo} and ${hi}`);
+        return n;
+      };
+      const formats = flags.formats ? flags.formats.split(",").map((s) => s.trim()).filter(Boolean) : null;
+      if (formats && !formats.length) throw new Error(`--formats takes a list from ${MOTION_FORMATS.join(", ")}`);
+      const result = await makeMotion({ config, specPath: flags.spec ?? null, name: flags.name ?? null, size: num(flags.size, "size", 16, 4096), formats, hold: num(flags.hold, "hold", 0, 10000) ?? 0, keepFrames: Boolean(flags["keep-frames"]) });
+      const f = result.facts;
+      const rb = f.readback ?? {};
+      const read = Object.entries(rb).map(([k, d]) => `${k} ${d.max === 0 ? "exact" : `within ${d.max} levels over ${(d.share * 100).toFixed(2)}%`}`);
+      const lines = [
+        `${result.name} motion in ${result.dir}: ${f.verdict} (${Math.round(f.duration)} ms at ${f.fps} fps, ${f.paths} paths in ${f.layers} layers, ${f.animations} animations, ${f.width}x${f.height})`,
+        ...(read.length ? [`read back the way each player reads it: ${read.join("; ")}`] : []),
+        f.settles.skipped ? "the end is not held to the artwork (endsOn is not artwork)" : f.settles.ok ? "it ends on the artwork: every layer back at rest, and the last frame the artwork drawn still" : `it does not end on the artwork: ${f.settles.off.join("; ") || `the last frame differs by ${f.settles.max} levels`}`,
+        ...(f.android ? [f.android.problems.length ? `Android: not written; ${f.android.problems.join("; ")}` : `Android: ${path.basename(result.files.android)}${f.android.splash ? ", a splash icon (108dp, under 1000 ms)" : ""}, ${Math.max(1, Math.round(f.android.bytes / 1024))} KB`] : []),
+        ...(result.files.lottie ? [`Lottie: ${path.basename(result.files.lottie)}, ${Math.max(1, Math.round(f.lottieBytes / 1024))} KB; SVG: ${path.basename(result.files.svg ?? "")}${f.svgBytes ? `, ${Math.max(1, Math.round(f.svgBytes / 1024))} KB` : ""}`] : []),
+        ...(f.gif ? [`GIF ${f.gif.frames} frames at 50 fps, ${Math.max(1, Math.round(f.gif.bytes / 1024))} KB${f.apng ? `; APNG ${Math.max(1, Math.round(f.apng.bytes / 1024))} KB` : ""}`] : []),
+        ...(f.mp4 ? [f.mp4.skipped ? `MP4: ${f.mp4.skipped}` : `MP4 ${f.mp4.width}x${f.mp4.height}, ${f.mp4.frames} frames at ${f.mp4.rate}, ${Math.max(1, Math.round(f.mp4.bytes / 1024))} KB (ffmpeg ${f.mp4.ffmpeg})`] : []),
+        ...(f.failures.length ? [`${f.failures.length} problem${f.failures.length === 1 ? "" : "s"}:\n${f.failures.map((x) => `  ${x}`).join("\n")}`] : []),
+        `open ${path.join(result.dir, "motion.html")}`,
+      ];
+      emit(config, lines.join("\n"), { command: "motion", ...result });
+      if (f.verdict !== "good") process.exitCode = 2;
       return;
     }
     case "sheet": {
