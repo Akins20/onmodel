@@ -1,6 +1,6 @@
 {
   "name": "@akins20/onmodel",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Images, sprites and sets kept on model: a consistency engine over Gemini's image models that generates from your product's real brief and references, measures every candidate, packs sprite sheets, and derives the assets apps, games and pages need.",
   "type": "module",
   "bin": {
