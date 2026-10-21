@@ -458,9 +458,9 @@ export function pose(scene, t, values = null) {
   return out;
 }
 
-/** Every path at rest: scale 1, no rotation, full opacity, each layer at its static translate. */
+/** Every path at rest: each moved scale, rotation and opacity back to 1, 0 and 1, everything else as set. */
 export function restPose(scene) {
-  return pose(scene, 0, (n, p) => (p === "translateX" || p === "translateY" ? n.values[p] : REST[p]));
+  return pose(scene, 0, (n, p) => (!scene.tracks.has(`${n.id}.${p}`) || p === "translateX" || p === "translateY" ? n.values[p] : REST[p]));
 }
 
 /** The properties that end somewhere other than rest, for the end-on-the-artwork check. */
@@ -469,7 +469,9 @@ export function unsettled(scene) {
   walk(scene.roots, (n) => {
     for (const p of PROPS) {
       const end = valueAt(n, p, scene.tracks, scene.duration);
-      const rest = p === "translateX" || p === "translateY" ? n.values[p] : REST[p];
+      // A property nothing moves is at rest where it was set: a wrapper scaled 2x to place a mark
+      // on a bigger canvas is the artwork, not a scale that failed to come back.
+      const rest = !scene.tracks.has(`${n.id}.${p}`) || p === "translateX" || p === "translateY" ? n.values[p] : REST[p];
       let d = end - rest;
       // A full turn is rest: a spin that ends at 360 shows the artwork exactly as 0 does.
       if (p === "rotate") {

@@ -22,6 +22,8 @@ import { slug } from "./generate.mjs";
 import { renderMotionHTML } from "./html.mjs";
 
 export const FORMATS = ["android", "lottie", "svg", "gif", "apng", "mp4", "poster"];
+/** The GIF rates whose frame delay is a whole number of hundredths of a second, which is all a GIF can hold. */
+export const GIF_RATES = [10, 20, 25, 50];
 const digest = (v) => createHash("sha256").update(v).digest("hex").slice(0, 16);
 
 /** ffmpeg and ffprobe, from ONMODEL_FFMPEG or the PATH; null when there is none. */
@@ -69,12 +71,13 @@ export function checkTimes(scene) {
   return picked;
 }
 
-export async function makeMotion({ config, specPath, name = null, size = null, formats = null, hold = 0, keepFrames = false, env = process.env, log = (s) => process.stderr.write(s) }) {
+export async function makeMotion({ config, specPath, name = null, size = null, formats = null, hold = 0, gifFps = 50, keepFrames = false, env = process.env, log = (s) => process.stderr.write(s) }) {
   if (!specPath) throw new Error("motion needs --spec <file.json>: the shapes and the timeline");
   const scene = await loadMotion(specPath);
   const wanted = formats ?? FORMATS;
   for (const f of wanted) if (!FORMATS.includes(f)) throw new Error(`--formats takes ${FORMATS.join(", ")}; got ${f}`);
   if (!(hold >= 0 && hold <= 10000)) throw new Error("--hold runs from 0 to 10000 milliseconds");
+  if (!GIF_RATES.includes(gifFps)) throw new Error(`--gif-fps takes ${GIF_RATES.join(", ")}: a GIF's frame delay is a whole number of hundredths of a second; got ${gifFps}`);
   const label = slug(name ?? scene.name);
   const dir = path.join(config.out, label, "motion");
   await mkdir(dir, { recursive: true });
@@ -146,8 +149,8 @@ export async function makeMotion({ config, specPath, name = null, size = null, f
   }
   facts.readback = readback;
 
-  // The raster outputs: GIF and APNG at 50 frames a second, which GIF's hundredths of a second
-  // keep exactly, and the video at the spec's own rate.
+  // The raster outputs: GIF and APNG at a rate GIF's hundredths of a second keep exactly (50 a
+  // second unless a long clip asks for fewer), and the video at the spec's own rate.
   const needRaster = wanted.some((f) => ["gif", "apng", "mp4", "poster"].includes(f));
   if (needRaster) {
     const posterImage = drawPose(pose(scene, scene.duration), scene, scale);
@@ -156,21 +159,21 @@ export async function makeMotion({ config, specPath, name = null, size = null, f
       await writeFile(files.poster, encodePNG(posterImage));
     }
     if (wanted.includes("gif") || wanted.includes("apng")) {
-      const animTimes = frameTimes(scene.duration, 50, hold);
+      const animTimes = frameTimes(scene.duration, gifFps, hold);
       const images = animTimes.map((t) => drawPose(pose(scene, t), scene, scale));
-      const frames = images.map((image) => ({ image, delayMs: 20 }));
+      const frames = images.map((image) => ({ image, delayMs: 1000 / gifFps }));
       if (wanted.includes("gif")) {
         files.gif = path.join(dir, `${label}.gif`);
         // Previews loop: a GIF is watched again and again, and one that stops reads as broken.
         const gif = encodeGIF(frames, { loops: 0 });
         await writeFile(files.gif, gif);
-        facts.gif = { frames: frames.length, bytes: gif.length, digest: digest(gif) };
+        facts.gif = { frames: frames.length, fps: gifFps, bytes: gif.length, digest: digest(gif) };
       }
       if (wanted.includes("apng")) {
         files.apng = path.join(dir, `${label}.apng.png`);
         const apng = encodeAPNG(frames, { loops: 0 });
         await writeFile(files.apng, apng);
-        facts.apng = { frames: frames.length, bytes: apng.length, digest: digest(apng) };
+        facts.apng = { frames: frames.length, fps: gifFps, bytes: apng.length, digest: digest(apng) };
       }
     }
     if (wanted.includes("mp4")) {

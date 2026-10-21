@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 (2026-10-21)
 
 - `motion`: shapes onmodel already made, moved from code. A JSON spec names its sources (the
   SVG `vector` traced, split into its subpaths, or text set letter by letter from a real font,
@@ -27,7 +27,14 @@
   the frame grid (0.14 off at frame times), the Lottie out point sat on the last frame so
   lottie-web drew nothing on the frame that should hold the finished mark, and the frame
   comparison read colour un-premultiplied, so a nearly transparent pixel produced 253-level
-  false differences.
+  false differences. Two more examples were built for the same product to cover the other
+  uses: a 2.4 s onboarding loop (the arcs fall away, the head tips back, the arcs call again;
+  Lottie exact, 509 KB GIF) and a 10 s intro clip at 1080 px (the mark pops in, the wordmark
+  set from Outfit arrives a letter at a time, three lines of positioning copy follow, the crow
+  calls once more; 72 paths in 19 layers, 301 frames of H.264 in 279 KB), which found that a
+  layer scaled or turned only to place the artwork was being reported as unsettled (its rest is
+  where it was set) and that a clip's GIF wants fewer frames than 50 a second: `--gif-fps 10`,
+  `20` or `25`, the rates a GIF's hundredths of a second hold exactly.
 
 ## 0.7.0 (2026-10-15)
 

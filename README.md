@@ -795,10 +795,12 @@ It writes, into `<out>/<name>/motion/`:
 - **An SVG animated with CSS**, `<name>.svg`: each moving group with its own
   `@keyframes`, sampled once a frame. It plays once and holds the end (`"loop": true`
   to repeat), and under `prefers-reduced-motion` it shows the finished artwork instead.
-- **A GIF and an APNG** at 50 frames a second, looping; **an MP4** (H.264, when ffmpeg is
-  on the PATH or named in `ONMODEL_FFMPEG`) at the spec's own rate on the background
-  colour; and a **poster** PNG of the last frame. `--hold 500` keeps the end on screen
-  that long in the rasters; `--size 1080` sets their pixel size; `--formats` picks.
+- **A GIF and an APNG**, looping, at 50 frames a second or at `--gif-fps 10`, `20` or
+  `25` for a longer clip (the rates a GIF's hundredths of a second hold exactly); **an
+  MP4** (H.264, when ffmpeg is on the PATH or named in `ONMODEL_FFMPEG`) at the spec's
+  own rate on the background colour; and a **poster** PNG of the last frame. `--hold
+  500` keeps the end on screen that long in the rasters; `--size 1080` sets their pixel
+  size; `--formats` picks.
 
 Then it checks what it wrote. Each vector file is read back the way its own player
 reads it (the drawable's object animators and interpolators, Lottie's keyframes and
@@ -933,7 +935,7 @@ stroked centre lines, `--tone N` to trace shaded art in up to N tones, `--mono` 
 smaller than N pixels. For `edit`: `--candidate 2` or `2e1` (the pick by default),
 `--change "..."`, `--in dir`, `--sheet`, `--no-judge`. For `motion`: `--spec file.json`,
 `--name slug`, `--size 432`, `--formats android,lottie,svg,gif,apng,mp4,poster`,
-`--hold 500`, `--keep-frames`. For `check`: `--name x` or `--in dir`,
+`--hold 500`, `--gif-fps 20`, `--keep-frames`. For `check`: `--name x` or `--in dir`,
 else every run under `--out`. For `price`: `--subjects N`, `--sprites "name:frames;..."`,
 `--store`, `--count`, `--size`, `--no-judge`. For every command: `--config`, `--out`,
 `--brief`, `--json`.

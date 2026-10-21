@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { BEZIERS, ANDROID_EASINGS, bezierEase, easing, svgPaths, textPaths, buildScene, groupMatrix, pose, unsettled, frameTimes, frameDiff, valueAt } from "../src/motion.mjs";
+import { BEZIERS, ANDROID_EASINGS, bezierEase, easing, svgPaths, textPaths, buildScene, groupMatrix, pose, restPose, drawPose, unsettled, frameTimes, frameDiff, valueAt } from "../src/motion.mjs";
 import { androidAVD, lottieJSON, animatedSVG, lottieShapes } from "../src/motionout.mjs";
 import { readAVD, readLottie, readSVG } from "../src/motionread.mjs";
 import { makeMotion, compareScenes, faithful, findFfmpeg, checkTimes } from "../src/motionset.mjs";
@@ -462,6 +462,41 @@ test("with ffmpeg installed the video holds every frame drawn, held at the end",
   assert.ok(made.facts.mp4.digest);
   const kept = await makeMotion({ config: { out: path.join(dir, "out2") }, specPath: specFile, formats: ["mp4"], keepFrames: true, log: () => {} });
   assert.ok(existsSync(path.join(kept.dir, "frames", "f00025.png")), "--keep-frames leaves the frames beside the video");
+});
+
+test("a long clip's GIF and APNG can run at a slower rate a GIF can hold exactly", async () => {
+  const dir = await sceneDir();
+  const specFile = path.join(dir, "demo.motion.json");
+  await writeFile(specFile, JSON.stringify(spec()));
+  const made = await makeMotion({ config: { out: path.join(dir, "out") }, specPath: specFile, formats: ["gif", "apng"], gifFps: 20, log: () => {} });
+  assert.equal(made.facts.gif.frames, 11, "500 ms at 20 a second");
+  assert.equal(made.facts.gif.fps, 20);
+  assert.equal(gifFrameCount(await readFile(made.files.gif)), 11);
+  const apng = apngInfo(await readFile(made.files.apng));
+  assert.equal(apng.frames, 11);
+  assert.equal(apng.delaysMs[0], 50);
+  await assert.rejects(makeMotion({ config: { out: path.join(dir, "out") }, specPath: specFile, formats: ["gif"], gifFps: 30, log: () => {} }), /--gif-fps takes 10, 20, 25, 50/);
+  const run = spawnSync(process.execPath, [bin, "motion", "--spec", specFile, "--out", path.join(dir, "out2"), "--formats", "gif", "--gif-fps", "25"], { encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /GIF 14 frames at 25 fps/);
+});
+
+test("a layer scaled or turned to place the artwork is at rest there, not at 1 and 0", async () => {
+  const { scene } = await sceneOf({
+    layers: [{ id: "placed", translate: [10, 5], scale: 0.5, rotate: 15, children: [{ id: "box", pivot: [25, 25], path: "mark:box" }, { id: "dot", path: "mark:dot" }] }],
+    animate: [{ target: "box", scale: [0.5, 1], for: 200, ease: "overshoot" }],
+    duration: 200,
+  });
+  assert.deepEqual(unsettled(scene), []);
+  const end = drawPose(pose(scene, 200), scene, 1, { background: null });
+  const still = drawPose(restPose(scene), scene, 1, { background: null });
+  assert.deepEqual(frameDiff(end, still, 0), { max: 0, share: 0 }, "the last frame is the artwork as placed");
+  const { scene: off } = await sceneOf({
+    layers: [{ id: "placed", scale: 0.5, children: [{ id: "box", path: "mark:box" }] }],
+    animate: [{ target: "placed", scale: [0.5, 0.8], for: 200 }],
+    duration: 200,
+  });
+  assert.deepEqual(unsettled(off), ["placed.scaleX ends at 0.8, not 1", "placed.scaleY ends at 0.8, not 1"], "a scale that moves must come back to 1");
 });
 
 test("without ffmpeg the video is skipped with a note, not failed", async () => {

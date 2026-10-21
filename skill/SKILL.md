@@ -266,7 +266,8 @@ exits 2. It is free; add it to the step that would publish the assets.
    `windowSplashScreenAnimationDuration` in the v31 theme. In-app or cross-platform:
    `<name>.lottie.json` with lottie-web, lottie-android or lottie-ios. A web page:
    `<name>.svg` inline. Previews, README, store listing: the GIF or the MP4
-   (`--hold 500` keeps the end on screen). `onmodel check` draws committed outputs
+   (`--hold 500` keeps the end on screen; `--gif-fps 20` keeps a clip's GIF a sane
+   size; a clip over a few seconds wants the MP4). `onmodel check` draws committed outputs
    against the spec in CI, so keep the spec where the summary records it.
 5. **What it will not do.** Shapes do not morph and strokes do not animate. A layer
    holds paths or children, not both. An Android drawable cannot fade two nested layers;
